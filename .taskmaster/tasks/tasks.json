@@ -1,0 +1,158 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Project scaffold, Tailwind, Vite API bridge & Vercel config",
+        "description": "Set up package.json, tsconfig (strict), Tailwind CSS, Vite config with shared serverless API middleware, .env.example, and vercel.json.",
+        "status": "done",
+        "priority": "high",
+        "dependencies": [],
+        "details": "Install React 19, TypeScript, Vite, Tailwind, SheetJS (xlsx), Lucide icons, @vercel/node types.",
+        "testStrategy": "npm run build and tsc --noEmit succeed.",
+        "updatedAt": "2026-11-11T19:47:16.521Z",
+        "subtasks": []
+      },
+      {
+        "id": "2",
+        "title": "Historical Data Parser & Sample Datasets",
+        "description": "Implement auto-detecting CSV/TSV/Excel parser for Simple Date/Vol, 48x7 Heatmap, Cross-Tab Pivot (Interval x Dates), and Long format plus realistic sample datasets.",
+        "status": "done",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "details": "Single cross-tab upload populates both daily forecasting series and per-day-of-week arrival pattern % curves.",
+        "testStrategy": "Unit tests verifying all 4 formats including blank cells as zero and ignoring Total rows.",
+        "subtasks": [],
+        "updatedAt": "2026-11-11T19:47:23.678Z"
+      },
+      {
+        "id": "3",
+        "title": "Tab 1 Forecasting Studio Engine (Conrad Carlberg)",
+        "description": "Implement Unweighted MA, Weighted MA, SES, Holt Linear, Holt-Winters Add/Mult & Seasonal Indices, Linear Regression, 80/20 chronological split, Outlier/Holiday cleaning, MultiStart auto-optimizer, and Granularity Bridge.",
+        "status": "done",
+        "priority": "high",
+        "dependencies": [
+          "2"
+        ],
+        "details": "Compute MAPE, WMAPE, sMAPE, RMSE, MAE/MAD, Forecast Bias %, and auto-rank best model.",
+        "testStrategy": "Unit tests against Conrad Carlberg Ch.2-4 numerical identities and edge cases.",
+        "subtasks": [],
+        "updatedAt": "2026-11-11T19:47:30.487Z"
+      },
+      {
+        "id": "4",
+        "title": "Tab 2 Interval & Erlang C/A Staffing Engine",
+        "description": "Implement overflow-safe recursive Erlang B/C, multi-constraint integer solver (SL, Max ASA, Max Occupancy Cap, Min Floor), and true Palm/Erlang-A abandonment modeling.",
+        "status": "done",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "details": "Support 60/30/15-min intervals, 24/7 or custom hours, and per-interval AHT overrides.",
+        "testStrategy": "Verify Erlang B/C/SL/ASA against ErlangXL97 Module1 values and test high traffic A > 500 without overflow.",
+        "subtasks": [],
+        "updatedAt": "2026-11-11T19:47:38.885Z"
+      },
+      {
+        "id": "5",
+        "title": "Tab 3 Capacity & Shrinkage FTE Waterfall + What-If Matrix",
+        "description": "Implement Erlang C Route vs Flat Top-Down Route, break-separated paid shift hours, compound In/Out-of-office shrinkage, weekly Operating/Agent days scaling, Schedule Inflexibility, Attrition Buffer, and 2D sensitivity matrix.",
+        "status": "done",
+        "priority": "high",
+        "dependencies": [
+          "4"
+        ],
+        "details": "Zero Occupancy double-counting in Erlang C route; zero break double-counting.",
+        "testStrategy": "Verify against Cap Plan Excel math (240 prod hrs, 9-1=8 login, 3% in-office, 7/5 weekly, 1.1 inflex, 20% OOO -> 60 FTE).",
+        "subtasks": [],
+        "updatedAt": "2026-11-11T19:47:45.725Z"
+      },
+      {
+        "id": "6",
+        "title": "SharePoint List + Power Automate Dual-Channel OTP Auth Gate",
+        "description": "Implement lib/auth-core.ts shared by api/auth/*.ts Vercel Serverless functions and Vite dev middleware with HMAC-SHA256 HttpOnly cookie sessions, Teams + Outlook channel selection, and fail-closed security.",
+        "status": "done",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "details": "Supports explicit AUTH_MODE=demo preview challenge mode when PA webhook URLs are not yet connected.",
+        "testStrategy": "Unit test HMAC cookie signing/verification, expiry, fail-closed when unconfigured, and Outlook/Teams request payloads.",
+        "subtasks": [],
+        "updatedAt": "2026-11-11T19:47:52.198Z"
+      },
+      {
+        "id": "7",
+        "title": "Comprehensive Unit Test Suite & QA Verification",
+        "description": "Write and execute deterministic Node test suite covering parsers, forecasting, Erlang C/A, capacity waterfall, and auth security.",
+        "status": "in-progress",
+        "priority": "high",
+        "dependencies": [
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "details": "Run via npm test using node --test.",
+        "testStrategy": "100% tests pass after all engine edits.",
+        "subtasks": [],
+        "updatedAt": "2026-11-11T19:47:58.799Z"
+      },
+      {
+        "id": "8",
+        "title": "Operate-Mode UI Design System, Bilingual AR/EN Shell & Login Gate",
+        "description": "Design restrained, daylight-precision WFM command center shell, RTL/LTR bilingual switcher, Auth Login Gate (Email + Teams/Outlook OTP), and in-app SharePoint/Power Automate Setup Wizard.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "6"
+        ],
+        "details": "Zero generic slop, tabular-nums on all metrics, accessible keyboard controls.",
+        "testStrategy": "Verified visually at desktop and mobile viewports in both AR and EN.",
+        "subtasks": []
+      },
+      {
+        "id": "9",
+        "title": "3-Tab Interactive UI, Precision SVG Charts & Multi-Sheet Excel/PDF Export",
+        "description": "Build Tab 1 Forecasting Studio, Tab 2 Interval & Erlang C/A Planner (+ 48x7 heatmap), Tab 3 Capacity Waterfall + What-If Matrix, and SheetJS multi-sheet .xlsx + printable PDF export.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "3",
+          "4",
+          "5",
+          "8"
+        ],
+        "details": "Direct Granularity Bridge button from Tab 1 -> Tab 2 and Productive Hours live link Tab 2 -> Tab 3.",
+        "testStrategy": "Interactive flow tested end-to-end in real browser; exported .xlsx verified.",
+        "subtasks": []
+      },
+      {
+        "id": "10",
+        "title": "Power Automate + SharePoint Docs, GitHub/Vercel Readiness & E2E Browser Check",
+        "description": "Write docs/POWER_AUTOMATE_SETUP.md, README.md, initialize git repo cleanly, run full build + Playwright headless browser inspection.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "7",
+          "9"
+        ],
+        "details": "Ensure zero secrets committed and production Vercel build works cleanly.",
+        "testStrategy": "npm test, tsc, npm run build, and headless Playwright checks all pass.",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2026-11-11T19:47:58.799Z",
+      "taskCount": 10,
+      "completedCount": 6,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}

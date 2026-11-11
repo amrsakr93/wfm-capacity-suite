@@ -1,0 +1,208 @@
+export type Periodicity = 'daily' | 'weekly' | 'monthly';
+
+export type ForecastModelId =
+  | 'sma'
+  | 'wma'
+  | 'ses'
+  | 'holt'
+  | 'holt_winters_add'
+  | 'holt_winters_mult'
+  | 'linear_regression';
+
+export interface HistoricalPoint {
+  id: string;
+  label: string; // YYYY-MM-DD or period label
+  date?: string; // ISO YYYY-MM-DD if parsed as date
+  volume: number;
+  isExcluded?: boolean;
+  isSmoothed?: boolean;
+  smoothedVolume?: number;
+}
+
+export interface ForecastConfig {
+  periodicity: Periodicity;
+  holdoutRatio: number; // default 0.20 (80/20 chronological)
+  horizon: number; // number of future periods to forecast
+  smaWindow: number;
+  wmaWeights: number[]; // newest-first or oldest-first (we use oldest -> newest, documented cleanly)
+  seasonLength: number; // e.g. 7 daily, 4/52 weekly, 12 monthly
+  autoOptimize: boolean;
+  manualModel: ForecastModelId;
+  manualAlpha: number;
+  manualGamma: number;
+  manualDelta: number;
+}
+
+export interface ForecastMetrics {
+  mape: number; // % skipping exact zeros
+  wmape: number; // % sum(|e|)/sum(y) - safe for zeros
+  smape: number; // %
+  rmse: number; // standard error on holdout
+  mae: number; // MAD
+  bias: number; // % sum(yhat - y)/sum(y)
+}
+
+export interface ForecastModelResult {
+  modelId: ForecastModelId;
+  params: Record<string, number | number[]>;
+  fittedTrain: number[];
+  holdoutPreds: number[];
+  futureForecast: number[];
+  holdoutMetrics: ForecastMetrics;
+  trainMetrics: ForecastMetrics;
+  r2?: number;
+  slope?: number;
+  intercept?: number;
+  isBest: boolean;
+  note?: string;
+}
+
+export interface ForecastingStudioOutput {
+  cleanedSeries: number[];
+  trainLength: number;
+  holdoutLength: number;
+  models: ForecastModelResult[];
+  bestModelId: ForecastModelId;
+}
+
+export type IntervalGranularityMin = 60 | 30 | 15;
+export type DayKey = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
+
+export interface IntervalRowInput {
+  index: number;
+  timeLabel: string; // e.g. "00:00", "08:30"
+  arrivalPct: number; // % of daily volume (0..100)
+  ahtOverrideSec?: number | null;
+}
+
+export interface ErlangConfig {
+  dailyVolume: number;
+  granularityMin: IntervalGranularityMin;
+  operating24x7: boolean;
+  startHour: number; // 0..23
+  endHour: number; // 1..24
+  globalAhtSec: number;
+  slTargetPct: number; // e.g. 80
+  slThresholdSec: number; // e.g. 20
+  maxAsaSec: number; // e.g. 30
+  maxOccupancyPct: number; // e.g. 85
+  minAgentsFloor: number; // e.g. 0 or 1
+  useErlangA: boolean;
+  avgPatienceSec: number; // e.g. 90
+  selectedDay: DayKey;
+}
+
+export interface IntervalStaffingRow {
+  index: number;
+  timeLabel: string;
+  isOpen: boolean;
+  arrivalPct: number;
+  volume: number;
+  ahtSec: number;
+  erlangs: number; // A
+  requiredSeats: number; // N
+  occupancyPct: number; // A / N * 100 (effective in Erlang A)
+  asaSec: number;
+  slPct: number;
+  probWaitPct: number;
+  abandonPct: number | null;
+  productiveHours: number; // N * I_min / 60
+  pureTalkHours: number; // A * I_min / 60
+}
+
+export interface ErlangSummary {
+  rows: IntervalStaffingRow[];
+  totalVolume: number;
+  totalPureTalkHours: number;
+  totalProductiveHours: number;
+  peakSeats: number;
+  peakTimeLabel: string;
+  weightedSlPct: number;
+  weightedAsaSec: number;
+  avgOccupancyPct: number;
+  weightedAbandonPct: number | null;
+}
+
+export type CapacityRoute = 'erlang_c' | 'flat_top_down';
+
+export interface CapacityConfig {
+  route: CapacityRoute;
+  // From Tab 2
+  erlangProductiveHoursPerDay: number;
+  pureTalkHoursPerDay: number;
+  flatTargetOccupancyPct: number;
+  // Shift structure (avoids break double-counting)
+  useShiftMinusBreak: boolean;
+  grossShiftHours: number; // e.g. 9
+  unpaidBreakHours: number; // e.g. 1 -> login = 8
+  paidShiftHoursDirect: number; // used if useShiftMinusBreak === false
+  // Weekly coverage
+  operatingDaysPerWeek: number; // e.g. 7
+  agentWorkdaysPerWeek: number; // e.g. 5
+  // Shrinkage & Inefficiency
+  scheduleInefficiencyPct: number; // e.g. 5% (or 10% inflex)
+  inOfficeBreakdown: {
+    trainingCoachingPct: number;
+    meetingsHuddlesPct: number;
+    systemDowntimePct: number;
+    paidBreaksPct: number;
+  };
+  outOfOfficeBreakdown: {
+    annualLeavePct: number;
+    sickLeavePct: number;
+    publicHolidaysPct: number;
+    unplannedAbsencePct: number;
+  };
+  attritionRampBufferPct: number; // optional buffer e.g. 5%
+}
+
+export interface WaterfallStep {
+  id: string;
+  labelEn: string;
+  labelAr: string;
+  hours: number;
+  fte: number;
+  deltaFte: number;
+  formulaNote: string;
+}
+
+export interface CapacityResult {
+  effectivePaidShiftHours: number;
+  inOfficeShrinkagePct: number;
+  outOfOfficeShrinkagePct: number;
+  compoundTotalShrinkagePct: number;
+  netProductiveHoursPerShiftPerFte: number;
+  baseRequiredProductiveHoursPerDay: number;
+  weeklyCoverageMultiplier: number;
+  dailyRequiredSeats: number;
+  weeklyRequiredSeatsBeforeInflex: number;
+  scheduledSeatsAfterInflex: number;
+  grossFteBeforeBuffer: number;
+  finalGrossFte: number;
+  effectiveMultiplierOverPureTalk: number;
+  waterfall: WaterfallStep[];
+}
+
+export interface WhatIfCell {
+  ahtDeltaSec: number;
+  shrinkageDeltaPct: number;
+  effectiveAhtSec: number;
+  effectiveTotalShrinkagePct: number;
+  productiveHoursPerDay: number;
+  finalGrossFte: number;
+  deltaFte: number;
+}
+
+export interface ParsedDataset {
+  format: 'simple_daily' | 'heatmap_48x7' | 'crosstab_pivot' | 'long_interval';
+  periodicityGuess: Periodicity;
+  dailySeries: HistoricalPoint[];
+  granularityMinGuess: IntervalGranularityMin;
+  dayCurves?: Record<DayKey, number[]>; // percentage arrays (sum = 100) aligned to 30m/60m/15m
+  dayOfWeekShares?: Record<DayKey, number>; // % share of weekly volume per day
+  timeLabels?: string[];
+  summaryNote: string;
+}
+
+export type OtpChannel = 'outlook' | 'teams' | 'both';
+
