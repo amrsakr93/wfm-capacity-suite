@@ -10,6 +10,7 @@ import {
   Sliders,
   ChevronDown,
   ChevronUp,
+  Download,
 } from 'lucide-react';
 import type {
   DayKey,
@@ -21,9 +22,22 @@ import type {
 } from '../engine/types.ts';
 import { parseFileDataset } from '../engine/parsers.ts';
 import { solveRequiredAgents } from '../engine/erlang.ts';
+import {
+  buildMultiDayErlangSchedules,
+  exportMultiDayIntervalScheduleXlsx,
+} from '../engine/exporter.ts';
 import { SmartNumberInput } from './SmartNumberInput.tsx';
 import { InteractiveStaffingChart } from './InteractiveCharts.tsx';
 import { ErlangQueueIcon, ProMaxIconBadge } from './ProMaxIcons.tsx';
+
+export type IntervalPlanScope = 'single_day' | 'next_week' | 'custom_days' | 'all_days';
+
+export interface HorizonDaySpec {
+  dateIso: string;
+  dayKey: DayKey;
+  volume: number;
+  sourceLabel: 'Historical' | 'Forecast';
+}
 
 interface Tab2Props {
   config: ErlangConfig;
@@ -41,6 +55,12 @@ interface Tab2Props {
   setMonthDays: (days: number) => void;
   hoops: number;
   setHoops: (h: number) => void;
+  historyDays: HorizonDaySpec[];
+  futureDays: HorizonDaySpec[];
+  intervalScope: IntervalPlanScope;
+  setIntervalScope: (s: IntervalPlanScope) => void;
+  customHorizonDays: number;
+  setCustomHorizonDays: (n: number) => void;
   onGranularityChange: (g: IntervalGranularityMin) => void;
   onSelectDay: (d: DayKey) => void;
   onSelectSpecificDate: (iso: string) => void;
@@ -64,6 +84,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
   setConfig,
   intervals,
   setIntervals,
+  dayCurves,
   byDateCurves,
   byDateTotals,
   dowShares,
@@ -74,6 +95,12 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
   setMonthDays,
   hoops,
   setHoops,
+  historyDays,
+  futureDays,
+  intervalScope,
+  setIntervalScope,
+  customHorizonDays,
+  setCustomHorizonDays,
   onGranularityChange,
   onSelectDay,
   onSelectSpecificDate,
@@ -85,6 +112,69 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [showGuardrails, setShowGuardrails] = useState(false);
+  const [multiDayFilterDate, setMultiDayFilterDate] = useState<string>('ALL');
+
+  // Build active multi-day horizon list based on intervalScope
+  const activeHorizonDays = useMemo<HorizonDaySpec[]>(() => {
+    if (intervalScope === 'next_week') {
+      return futureDays.slice(0, 7);
+    }
+    if (intervalScope === 'custom_days') {
+      const n = Math.max(1, Math.min(60, customHorizonDays));
+      return futureDays.slice(0, n);
+    }
+    if (intervalScope === 'all_days') {
+      return [...historyDays, ...futureDays.slice(0, 14)];
+    }
+    // single_day
+    return [
+      {
+        dateIso: config.selectedDateIso || 'Active-Day',
+        dayKey: config.selectedDay,
+        volume: config.dailyVolume,
+        sourceLabel: config.selectedDateIso ? 'Historical' : 'Forecast',
+      },
+    ];
+  }, [intervalScope, futureDays, historyDays, customHorizonDays, config]);
+
+  const multiDaySchedules = useMemo(() => {
+    return buildMultiDayErlangSchedules({
+      days: activeHorizonDays,
+      erlangConfig: config,
+      dayCurves,
+      byDateCurves,
+    });
+  }, [activeHorizonDays, config, dayCurves, byDateCurves]);
+
+  const filteredMultiDaySchedules = useMemo(() => {
+    if (multiDayFilterDate === 'ALL') return multiDaySchedules;
+    const found = multiDaySchedules.filter((d) => d.dateIso === multiDayFilterDate);
+    return found.length > 0 ? found : multiDaySchedules;
+  }, [multiDaySchedules, multiDayFilterDate]);
+
+  const multiDayTotals = useMemo(() => {
+    const totalCalls = filteredMultiDaySchedules.reduce((s, d) => s + d.dailyVolume, 0);
+    const totalProdHrs = filteredMultiDaySchedules.reduce(
+      (s, d) => s + d.summary.totalProductiveHours,
+      0
+    );
+    const avgSla =
+      filteredMultiDaySchedules.length > 0
+        ? filteredMultiDaySchedules.reduce((s, d) => s + d.summary.weightedSlPct, 0) /
+          filteredMultiDaySchedules.length
+        : 0;
+    const peakSeats = filteredMultiDaySchedules.reduce(
+      (m, d) => Math.max(m, d.summary.peakSeats),
+      0
+    );
+    return {
+      daysCount: filteredMultiDaySchedules.length,
+      totalCalls,
+      totalProdHrs,
+      avgSla,
+      peakSeats,
+    };
+  }, [filteredMultiDaySchedules]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -790,119 +880,376 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
         </div>
       </div>
 
-      {/* Detailed Interval Schedule Table showing BOTH Integer Agents & Fractional Agents */}
+      {/* Detailed Interval Schedule Table showing BOTH Integer Agents & Fractional Agents + Multi-Day Horizon & Export */}
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
-        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Clock className="w-4 h-4 text-sky-500" />
-              Per-Interval Erlang Staffing Schedule ({summary.rows.length} intervals ×{' '}
-              {config.granularityMin} min)
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Displays both <code>Integer Agents (=Agents)</code> and{' '}
-              <code>Fractional Agents (=FractionalAgents)</code> side-by-side. Total Volume:{' '}
-              <strong>{summary.totalVolume.toLocaleString()}</strong>.
-            </p>
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Clock className="w-4 h-4 text-sky-500" />
+                Per-Interval Erlang Staffing Schedule (
+                {intervalScope === 'single_day'
+                  ? `${summary.rows.length} intervals × ${config.granularityMin} min`
+                  : `${multiDayTotals.daysCount} Days × ${summary.rows.length} intervals`}
+                )
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Displays both <code>Integer Agents (=Agents)</code> and{' '}
+                <code>Fractional Agents (=FractionalAgents)</code> side-by-side.{' '}
+                {intervalScope === 'single_day' ? (
+                  <>
+                    Total Volume: <strong>{summary.totalVolume.toLocaleString()}</strong> · Total Productive Hours:{' '}
+                    <strong className="text-sky-600 dark:text-sky-400">
+                      {summary.totalProductiveHours.toFixed(2)} hrs
+                    </strong>
+                  </>
+                ) : (
+                  <>
+                    Horizon Calls: <strong>{multiDayTotals.totalCalls.toLocaleString()}</strong> · Total Prod Hours:{' '}
+                    <strong className="text-sky-600 dark:text-sky-400">
+                      {multiDayTotals.totalProdHrs.toFixed(2)} hrs
+                    </strong>{' '}
+                    · Avg SLA:{' '}
+                    <strong className="text-emerald-600 dark:text-emerald-400">
+                      {multiDayTotals.avgSla.toFixed(1)}%
+                    </strong>
+                  </>
+                )}
+              </p>
+            </div>
+
+            {/* Export Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (intervalScope === 'single_day') {
+                    exportMultiDayIntervalScheduleXlsx({
+                      schedules: [
+                        {
+                          dateIso: config.selectedDateIso || `Active-${config.selectedDay}`,
+                          dayKey: config.selectedDay,
+                          dailyVolume: summary.totalVolume,
+                          sourceLabel: config.selectedDateIso ? 'Historical' : 'Forecast',
+                          summary,
+                        },
+                      ],
+                      erlangConfig: config,
+                      scopeLabel: `Single_Day_${config.selectedDateIso || config.selectedDay}`,
+                    });
+                  } else {
+                    exportMultiDayIntervalScheduleXlsx({
+                      schedules: filteredMultiDaySchedules,
+                      erlangConfig: config,
+                      scopeLabel:
+                        multiDayFilterDate === 'ALL'
+                          ? `Horizon_${intervalScope}_${filteredMultiDaySchedules.length}d`
+                          : `Day_${multiDayFilterDate}`,
+                    });
+                  }
+                }}
+                className="btn-cnx-teal inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold shadow-xs transition cursor-pointer"
+                title="Download Excel (.xlsx) for the currently displayed day or view"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {intervalScope === 'single_day' || multiDayFilterDate !== 'ALL'
+                  ? 'Export Selected Day (.xlsx)'
+                  : `Export ${filteredMultiDaySchedules.length}d Schedule (.xlsx)`}
+              </button>
+
+              {intervalScope !== 'single_day' && multiDayFilterDate !== 'ALL' && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    exportMultiDayIntervalScheduleXlsx({
+                      schedules: multiDaySchedules,
+                      erlangConfig: config,
+                      scopeLabel: `Full_Horizon_${multiDaySchedules.length}d`,
+                    })
+                  }
+                  className="btn-cnx-primary inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold shadow-xs transition cursor-pointer"
+                  title="Download Excel (.xlsx) for the entire multi-day horizon"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export All {multiDaySchedules.length} Days (.xlsx)
+                </button>
+              )}
+            </div>
           </div>
-          <span className="text-xs font-mono text-slate-500">
-            Total Productive Hours: <strong>{summary.totalProductiveHours.toFixed(2)} hrs</strong>
-          </span>
+
+          {/* Scope Bar: Single Day | Next Week (7d) | Custom N Days (e.g. 10d) | Full Period (All Days) */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-800/70">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mr-1">
+                Planning Horizon:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIntervalScope('single_day');
+                  setMultiDayFilterDate('ALL');
+                }}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition cursor-pointer ${
+                  intervalScope === 'single_day'
+                    ? 'bg-[#00A3E0] text-white shadow-xs'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+              >
+                Single Day ({config.selectedDateIso || config.selectedDay})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIntervalScope('next_week');
+                  setMultiDayFilterDate('ALL');
+                }}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition cursor-pointer ${
+                  intervalScope === 'next_week'
+                    ? 'bg-[#00A3E0] text-white shadow-xs'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+              >
+                Next Week (7 Days · Mon → Sun)
+              </button>
+
+              <div className="inline-flex items-center gap-1 rounded-lg bg-slate-100 dark:bg-slate-800 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIntervalScope('custom_days');
+                    setMultiDayFilterDate('ALL');
+                  }}
+                  className={`rounded-md px-2.5 py-1 text-xs font-bold transition cursor-pointer ${
+                    intervalScope === 'custom_days'
+                      ? 'bg-[#00A3E0] text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  Custom N Days:
+                </button>
+                <SmartNumberInput
+                  value={customHorizonDays}
+                  min={1}
+                  max={60}
+                  step={1}
+                  onChange={(v) => {
+                    setCustomHorizonDays(Math.round(v));
+                    setIntervalScope('custom_days');
+                    setMultiDayFilterDate('ALL');
+                  }}
+                  className="w-14 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-1.5 py-0.5 text-xs font-bold text-center tabular-nums"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIntervalScope('all_days');
+                  setMultiDayFilterDate('ALL');
+                }}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition cursor-pointer ${
+                  intervalScope === 'all_days'
+                    ? 'bg-[#00A3E0] text-white shadow-xs'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+              >
+                Full Period ({historyDays.length + Math.min(14, futureDays.length)} Days)
+              </button>
+            </div>
+
+            {/* Day Filter when in Multi-Day Horizon Mode */}
+            {intervalScope !== 'single_day' && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                  Inspect Day:
+                </span>
+                <select
+                  value={multiDayFilterDate}
+                  onChange={(e) => setMultiDayFilterDate(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1 text-xs font-semibold text-slate-800 dark:text-slate-100"
+                >
+                  <option value="ALL">
+                    All {multiDaySchedules.length} Days Combined ({multiDaySchedules.length * summary.rows.length} rows)
+                  </option>
+                  {multiDaySchedules.map((d) => (
+                    <option key={d.dateIso} value={d.dateIso}>
+                      {d.dateIso} ({d.dayKey}) · {d.dailyVolume.toLocaleString()} calls · {d.sourceLabel}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="max-h-96 overflow-y-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-slate-950 text-slate-500 border-b border-slate-200 dark:border-slate-800">
-              <tr>
-                <th className="py-2.5 px-3 font-semibold">Interval</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Arrival %</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Calls</th>
-                <th className="py-2.5 px-3 font-semibold text-right">AHT (s)</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Erlangs (A)</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Integer Agents</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Fractional Agents</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Occupancy %</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Expected SLA %</th>
-                <th className="py-2.5 px-3 font-semibold text-right">ASA (s)</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Prod. Hours</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60">
-              {summary.rows.map((r, idx) => (
-                <tr
-                  key={r.index}
-                  className={
-                    r.isOpen ? 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40' : 'opacity-45'
-                  }
-                >
-                  <td className="py-1.5 px-3 font-mono font-medium">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Calendar className="w-3 h-3 text-slate-400" />
-                      {r.timeLabel}
-                    </span>
-                  </td>
-                  <td className="py-1.5 px-3 text-right">
-                    <input
-                      type="number"
-                      step={0.1}
-                      min={0}
-                      value={Number(intervals[idx]?.arrivalPct.toFixed(3) ?? 0)}
-                      onChange={(e) => updateRowOverride(idx, 'arrivalPct', e.target.value)}
-                      className="w-16 text-right rounded border border-slate-200 dark:border-slate-700 bg-transparent px-1.5 py-0.5 tabular-nums"
-                    />
-                  </td>
-                  <td
-                    className={`py-1.5 px-3 text-right tabular-nums ${heatBg(r.volume / maxVol)}`}
-                  >
-                    {r.volume.toLocaleString()}
-                  </td>
-                  <td className="py-1.5 px-3 text-right">
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder={String(config.globalAhtSec)}
-                      value={intervals[idx]?.ahtOverrideSec ?? ''}
-                      onChange={(e) => updateRowOverride(idx, 'ahtOverrideSec', e.target.value)}
-                      className="w-16 text-right rounded border border-slate-200 dark:border-slate-700 bg-transparent px-1.5 py-0.5 tabular-nums placeholder:text-slate-400"
-                    />
-                  </td>
-                  <td className="py-1.5 px-3 text-right tabular-nums text-slate-600 dark:text-slate-300">
-                    {r.erlangs.toFixed(2)}
-                  </td>
-                  <td
-                    className={`py-1.5 px-3 text-right tabular-nums ${
-                      (config.agentMode ?? 'integer') === 'integer'
-                        ? heatBg(r.requiredSeats / maxSeats)
-                        : 'text-slate-500'
-                    }`}
-                  >
-                    {r.integerSeats}
-                  </td>
-                  <td
-                    className={`py-1.5 px-3 text-right tabular-nums ${
-                      config.agentMode === 'fractional'
-                        ? heatBg(r.requiredSeats / maxSeats)
-                        : 'text-sky-600 dark:text-sky-400 font-medium'
-                    }`}
-                  >
-                    {r.fractionalSeats.toFixed(2)}
-                  </td>
-                  <td className="py-1.5 px-3 text-right tabular-nums">
-                    {r.occupancyPct.toFixed(1)}%
-                  </td>
-                  <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-emerald-600 dark:text-emerald-400">
-                    {r.slPct.toFixed(1)}%
-                  </td>
-                  <td className="py-1.5 px-3 text-right tabular-nums">
-                    {r.asaSec.toFixed(1)}s
-                  </td>
-                  <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-sky-600 dark:text-sky-400">
-                    {r.productiveHours.toFixed(2)}
-                  </td>
+          {intervalScope === 'single_day' ? (
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-slate-950 text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                <tr>
+                  <th className="py-2.5 px-3 font-semibold">Interval</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Arrival %</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Calls</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">AHT (s)</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Erlangs (A)</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Integer Agents</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Fractional Agents</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Occupancy %</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Expected SLA %</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">ASA (s)</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Prod. Hours</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60">
+                {summary.rows.map((r, idx) => (
+                  <tr
+                    key={r.index}
+                    className={
+                      r.isOpen ? 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40' : 'opacity-45'
+                    }
+                  >
+                    <td className="py-1.5 px-3 font-mono font-medium">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Calendar className="w-3 h-3 text-slate-400" />
+                        {r.timeLabel}
+                      </span>
+                    </td>
+                    <td className="py-1.5 px-3 text-right">
+                      <input
+                        type="number"
+                        step={0.1}
+                        min={0}
+                        value={Number(intervals[idx]?.arrivalPct.toFixed(3) ?? 0)}
+                        onChange={(e) => updateRowOverride(idx, 'arrivalPct', e.target.value)}
+                        className="w-16 text-right rounded border border-slate-200 dark:border-slate-700 bg-transparent px-1.5 py-0.5 tabular-nums"
+                      />
+                    </td>
+                    <td
+                      className={`py-1.5 px-3 text-right tabular-nums ${heatBg(r.volume / maxVol)}`}
+                    >
+                      {r.volume.toLocaleString()}
+                    </td>
+                    <td className="py-1.5 px-3 text-right">
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder={String(config.globalAhtSec)}
+                        value={intervals[idx]?.ahtOverrideSec ?? ''}
+                        onChange={(e) => updateRowOverride(idx, 'ahtOverrideSec', e.target.value)}
+                        className="w-16 text-right rounded border border-slate-200 dark:border-slate-700 bg-transparent px-1.5 py-0.5 tabular-nums placeholder:text-slate-400"
+                      />
+                    </td>
+                    <td className="py-1.5 px-3 text-right tabular-nums text-slate-600 dark:text-slate-300">
+                      {r.erlangs.toFixed(2)}
+                    </td>
+                    <td
+                      className={`py-1.5 px-3 text-right tabular-nums ${
+                        (config.agentMode ?? 'integer') === 'integer'
+                          ? heatBg(r.requiredSeats / maxSeats)
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      {r.integerSeats}
+                    </td>
+                    <td
+                      className={`py-1.5 px-3 text-right tabular-nums ${
+                        config.agentMode === 'fractional'
+                          ? heatBg(r.requiredSeats / maxSeats)
+                          : 'text-sky-600 dark:text-sky-400 font-medium'
+                      }`}
+                    >
+                      {r.fractionalSeats.toFixed(2)}
+                    </td>
+                    <td className="py-1.5 px-3 text-right tabular-nums">
+                      {r.occupancyPct.toFixed(1)}%
+                    </td>
+                    <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-emerald-600 dark:text-emerald-400">
+                      {r.slPct.toFixed(1)}%
+                    </td>
+                    <td className="py-1.5 px-3 text-right tabular-nums">
+                      {r.asaSec.toFixed(1)}s
+                    </td>
+                    <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-sky-600 dark:text-sky-400">
+                      {r.productiveHours.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-slate-950 text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                <tr>
+                  <th className="py-2.5 px-3 font-semibold">Date (Day)</th>
+                  <th className="py-2.5 px-3 font-semibold">Source</th>
+                  <th className="py-2.5 px-3 font-semibold">Interval</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Arrival %</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Calls</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Erlangs (A)</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Integer Agents</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Fractional Agents</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Occupancy %</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Expected SLA %</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">ASA (s)</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Prod. Hours</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60">
+                {filteredMultiDaySchedules.map((daySched) =>
+                  daySched.summary.rows.map((r) => (
+                    <tr
+                      key={`${daySched.dateIso}-${r.index}`}
+                      className={
+                        r.isOpen ? 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40' : 'opacity-45'
+                      }
+                    >
+                      <td className="py-1.5 px-3 font-mono font-semibold text-slate-800 dark:text-slate-200">
+                        {daySched.dateIso} ({daySched.dayKey})
+                      </td>
+                      <td className="py-1.5 px-3">
+                        <span
+                          className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                            daySched.sourceLabel === 'Forecast'
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                          }`}
+                        >
+                          {daySched.sourceLabel}
+                        </span>
+                      </td>
+                      <td className="py-1.5 px-3 font-mono font-medium">{r.timeLabel}</td>
+                      <td className="py-1.5 px-3 text-right tabular-nums">
+                        {r.arrivalPct.toFixed(3)}%
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-semibold">
+                        {r.volume.toLocaleString()}
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums text-slate-600 dark:text-slate-300">
+                        {r.erlangs.toFixed(2)}
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
+                        {r.integerSeats}
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-bold text-sky-600 dark:text-sky-400">
+                        {r.fractionalSeats.toFixed(2)}
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums">
+                        {r.occupancyPct.toFixed(1)}%
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-emerald-600 dark:text-emerald-400">
+                        {r.slPct.toFixed(1)}%
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums">{r.asaSec.toFixed(1)}s</td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-sky-600 dark:text-sky-400">
+                        {r.productiveHours.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

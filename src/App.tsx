@@ -30,12 +30,12 @@ import {
   DEFAULT_30M_CURVES,
   DEFAULT_DOW_SHARES,
 } from './engine/samples.ts';
-import { runForecastingStudio } from './engine/forecasting.ts';
+import { buildFutureHorizonSummary, runForecastingStudio } from './engine/forecasting.ts';
 import { runErlangPlanner, solveRequiredAgents } from './engine/erlang.ts';
 import { buildWhatIfMatrix, calculateCapacityWaterfall } from './engine/capacity.ts';
-import { exportFullSuiteWorkbook } from './engine/exporter.ts';
+import { exportFullSuiteWorkbook, exportHorizonForecastXlsx } from './engine/exporter.ts';
 import { Tab1Forecasting } from './components/Tab1Forecasting.tsx';
-import { Tab2Erlang } from './components/Tab2Erlang.tsx';
+import { Tab2Erlang, type IntervalPlanScope, type HorizonDaySpec } from './components/Tab2Erlang.tsx';
 import { Tab3Capacity } from './components/Tab3Capacity.tsx';
 
 type ActiveTab = 'tab1' | 'tab2' | 'tab3';
@@ -147,6 +147,46 @@ export const App: React.FC = () => {
     () => runErlangPlanner(intervals, erlangConfig),
     [intervals, erlangConfig]
   );
+
+  // Multi-Day Interval Planning Scope State (Tab 2)
+  const [intervalScope, setIntervalScope] = useState<IntervalPlanScope>('single_day');
+  const [customHorizonDays, setCustomHorizonDays] = useState<number>(10);
+
+  // Build Historical & 60-Day Future Horizon Day Specs (aligned to Monday start)
+  const { historyDays, futureDays } = useMemo(() => {
+    const histList: HorizonDaySpec[] = history.map((pt, idx) => {
+      const parsed = new Date(pt.label.length <= 10 ? `${pt.label}T00:00:00` : pt.label);
+      const dk: DayKey = !Number.isNaN(parsed.getTime())
+        ? JS_DAY_TO_KEY[parsed.getDay()]
+        : JS_DAY_TO_KEY[idx % 7];
+      return {
+        dateIso: pt.label,
+        dayKey: dk,
+        volume: Math.max(0, Math.round(pt.volume)),
+        sourceLabel: 'Historical',
+      };
+    });
+
+    const activeModel =
+      forecastOutput.models.find((m) => m.modelId === selectedModelId) ??
+      forecastOutput.models.find((m) => m.isBest) ??
+      forecastOutput.models[0];
+
+    const futSummary = buildFutureHorizonSummary(
+      history,
+      activeModel,
+      forecastConfig.periodicity,
+      dowShares
+    );
+    const futList: HorizonDaySpec[] = futSummary.allFutureDays.map((d) => ({
+      dateIso: d.dateIso,
+      dayKey: d.dayKey,
+      volume: d.volume,
+      sourceLabel: 'Forecast',
+    }));
+
+    return { historyDays: histList, futureDays: futList };
+  }, [history, forecastOutput, selectedModelId, forecastConfig, dowShares]);
 
   // Live Monthly Cap Plan Erlang C calculation (Monthly -> Daily -> Hourly -> Erlang Required/Hr -> Required/Day)
   const monthlyCapPlanHours = useMemo(() => {
@@ -331,9 +371,49 @@ export const App: React.FC = () => {
       dayCurves[nextDay] ??
       dayCurves.Mon;
     setIntervals(buildIntervalInputsForGranularity(curveToUse, erlangConfig.granularityMin));
+    setIntervalScope('single_day');
     setActiveTab('tab2');
     showNotice(
       `Transferred ${cleanDaily.toLocaleString()} daily calls (${dateIso ?? nextDay}) to Tab 2 Erlang Planner.`
+    );
+  };
+
+  const handlePlanMultiDayInErlang = (
+    scope: 'next_week' | 'custom_days' | 'all_days',
+    daysCount?: number
+  ) => {
+    setIntervalScope(scope);
+    if (daysCount !== undefined) {
+      setCustomHorizonDays(daysCount);
+    }
+    setActiveTab('tab2');
+    showNotice(
+      scope === 'next_week'
+        ? 'Opened Next Week (7 Days · Mon → Sun) Per-Interval Schedule in Tab 2.'
+        : scope === 'custom_days'
+          ? `Opened Custom ${daysCount ?? customHorizonDays}-Day Per-Interval Schedule in Tab 2.`
+          : 'Opened Full Period Per-Interval Schedule in Tab 2.'
+    );
+  };
+
+  const handleExportHorizonForecast = (
+    focusHorizon: 'next_week' | 'current_month' | 'next_month' | 'all'
+  ) => {
+    exportHorizonForecastXlsx({
+      history,
+      forecastConfig,
+      forecastOutput,
+      selectedModelId,
+      dowShares,
+      dayCurves,
+      byDateCurves,
+      erlangConfig,
+      focusHorizon,
+    });
+    showNotice(
+      focusHorizon === 'next_week'
+        ? 'Downloaded Next Week (Mon → Sun) Forecast & Interval Schedule (.xlsx).'
+        : 'Downloaded Future Forecast Horizons (.xlsx).'
     );
   };
 
@@ -389,6 +469,13 @@ export const App: React.FC = () => {
       forecastConfig,
       forecastOutput,
       selectedModelId,
+      dowShares,
+      dayCurves,
+      byDateCurves,
+      byDateTotals,
+      monthlyVolume,
+      monthDays,
+      hoops,
       erlangConfig,
       erlangSummary,
       capacityConfig,
@@ -396,7 +483,9 @@ export const App: React.FC = () => {
       whatIfMatrix,
       shrinkageDeltas: SHRINKAGE_DELTAS,
     });
-    showNotice('Exported 4-sheet Excel workbook (.xlsx).');
+    showNotice(
+      'Downloaded 7-Sheet Executive WFM Report (.xlsx) with Next Week, Monthly & All-Days Arrival + SLA!'
+    );
   };
 
   return (
@@ -580,6 +669,8 @@ export const App: React.FC = () => {
             onLoadSampleMonthly={() => {}}
             onPushToErlang={handlePushToErlang}
             onPushMonthlyToSuite={handlePushMonthlyToSuite}
+            onExportHorizonForecast={handleExportHorizonForecast}
+            onPlanMultiDayInErlang={handlePlanMultiDayInErlang}
           />
         )}
 
@@ -600,6 +691,12 @@ export const App: React.FC = () => {
             setMonthDays={setMonthDays}
             hoops={hoops}
             setHoops={setHoops}
+            historyDays={historyDays}
+            futureDays={futureDays}
+            intervalScope={intervalScope}
+            setIntervalScope={setIntervalScope}
+            customHorizonDays={customHorizonDays}
+            setCustomHorizonDays={setCustomHorizonDays}
             onGranularityChange={handleGranularityChange}
             onSelectDay={handleSelectDay}
             onSelectSpecificDate={handleSelectSpecificDate}

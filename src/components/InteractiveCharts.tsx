@@ -88,8 +88,9 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
       showSeries.future ? d.futurePred : undefined,
     ].filter((v): v is number => v !== undefined && Number.isFinite(v))
   );
-  const maxV = Math.max(100, ...(allVals.length ? allVals : [1000])) * 1.08;
-  const minV = Math.max(0, Math.min(...(allVals.length ? allVals : [0])) * 0.88);
+  const maxV = Math.max(300, ...(allVals.length ? allVals : [1000])) * 1.08;
+  const rawMin = allVals.length ? Math.min(...allVals) : 200;
+  const minV = rawMin >= 200 ? 200 : 0;
   const spanV = Math.max(1, maxV - minV);
   const totalPts = Math.max(2, visibleData.length);
 

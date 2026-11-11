@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronUp,
   Zap,
+  Download,
 } from 'lucide-react';
 import type {
   DayKey,
@@ -60,6 +61,13 @@ interface Tab1Props {
     customCurvePct?: number[]
   ) => void;
   onPushMonthlyToSuite: (monthlyVolume: number, monthDays: number) => void;
+  onExportHorizonForecast?: (
+    focusHorizon: 'next_week' | 'current_month' | 'next_month' | 'all'
+  ) => void;
+  onPlanMultiDayInErlang?: (
+    scope: 'next_week' | 'custom_days' | 'all_days',
+    customDaysCount?: number
+  ) => void;
 }
 
 const DAY_KEYS: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -158,6 +166,8 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
   onDatasetImported,
   onPushToErlang,
   onPushMonthlyToSuite,
+  onExportHorizonForecast,
+  onPlanMultiDayInErlang,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
@@ -714,10 +724,23 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                   <CalendarHorizonIcon tone="cyan" size={16} />
                   Next Week Forecast (Mon → Sun)
                 </span>
-                <span className="text-[11px] font-mono text-slate-400">
-                  {futureSummary.nextWeekDays[0]?.dateIso.slice(5)} →{' '}
-                  {futureSummary.nextWeekDays[6]?.dateIso.slice(5)}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-mono text-slate-400">
+                    {futureSummary.nextWeekDays[0]?.dateIso.slice(5)} →{' '}
+                    {futureSummary.nextWeekDays[6]?.dateIso.slice(5)}
+                  </span>
+                  {onExportHorizonForecast && (
+                    <button
+                      type="button"
+                      onClick={() => onExportHorizonForecast('next_week')}
+                      title="Export Next Week Forecast & 7-Day Intervals (.xlsx)"
+                      className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-1 text-[10px] font-bold shadow-xs transition cursor-pointer"
+                    >
+                      <Download className="w-3 h-3" />
+                      Export .xlsx
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="mt-4 flex items-baseline justify-between">
@@ -740,7 +763,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
               {/* 7-Day Interactive Breakdown Strip */}
               <div className="mt-4 pt-3 border-t border-slate-200/80 dark:border-slate-800">
                 <div className="text-[11px] font-semibold text-slate-500 mb-2 flex items-center justify-between">
-                  <span>Click any day to inspect or staff:</span>
+                  <span>Click any day to inspect or plan intervals:</span>
                   <span className="text-amber-600 dark:text-amber-400">
                     Peak: {futureSummary.nextWeekPeakDay?.dayKey} (
                     {futureSummary.nextWeekPeakDay?.volume.toLocaleString()})
@@ -749,6 +772,10 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                 <div className="grid grid-cols-7 gap-1">
                   {futureSummary.nextWeekDays.map((d) => {
                     const isPeak = d.dateIso === futureSummary.nextWeekPeakDay?.dateIso;
+                    const activeNextDayIso =
+                      futureSummary.nextWeekDays.find((nd) => nd.dateIso === selectedInspectDate)
+                        ?.dateIso ?? futureSummary.nextWeekDays[0]?.dateIso;
+                    const isSelectedDay = d.dateIso === activeNextDayIso;
                     return (
                       <button
                         key={d.dateIso}
@@ -758,8 +785,8 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                           setSelectedInspectDate(d.dateIso);
                         }}
                         className={`rounded-lg p-1.5 text-center border transition cursor-pointer ${
-                          selectedInspectDate === d.dateIso
-                            ? 'border-sky-500 bg-sky-500/15 ring-1 ring-sky-500'
+                          isSelectedDay
+                            ? 'border-sky-500 bg-sky-500/15 ring-2 ring-sky-500'
                             : isPeak
                               ? 'border-amber-500/40 bg-amber-500/10'
                               : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 hover:border-sky-400'
@@ -779,34 +806,84 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
               </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  onPushToErlang(
-                    futureSummary.nextWeekDailyAvg,
-                    futureSummary.nextWeekPeakDay?.dayKey ?? 'Mon'
-                  )
-                }
-                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3 py-2 text-xs font-semibold shadow-xs transition cursor-pointer"
-              >
-                Staff Avg Day ({futureSummary.nextWeekDailyAvg.toLocaleString()})
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  onPushToErlang(
-                    futureSummary.nextWeekPeakDay.volume,
-                    futureSummary.nextWeekPeakDay.dayKey,
-                    futureSummary.nextWeekPeakDay.dateIso
-                  )
-                }
-                className="inline-flex items-center justify-center gap-1 rounded-xl border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 px-3 py-2 text-xs font-semibold transition cursor-pointer"
-              >
-                Peak Day
-              </button>
-            </div>
+            {(() => {
+              const chosenDay =
+                futureSummary.nextWeekDays.find((nd) => nd.dateIso === selectedInspectDate) ??
+                futureSummary.nextWeekDays[0];
+              return (
+                <div className="mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800 space-y-2">
+                  {/* Primary Row: Plan Selected Day Intervals OR Plan Full Week (7d) Intervals */}
+                  <div className="flex items-center gap-2">
+                    {chosenDay && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onPushToErlang(
+                            chosenDay.volume,
+                            chosenDay.dayKey,
+                            chosenDay.dateIso,
+                            byDateCurves[chosenDay.dateIso] ?? dayCurves[chosenDay.dayKey]
+                          )
+                        }
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3 py-2 text-xs font-bold shadow-xs transition cursor-pointer"
+                      >
+                        Plan {chosenDay.dayKey} {chosenDay.dateIso.slice(8)} (
+                        {chosenDay.volume.toLocaleString()})
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {onPlanMultiDayInErlang && (
+                      <button
+                        type="button"
+                        onClick={() => onPlanMultiDayInErlang('next_week')}
+                        className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 text-xs font-bold shadow-xs transition cursor-pointer"
+                      >
+                        Plan 7d Week
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Secondary Quick Actions Row: Avg Day, Peak Day, 10 Days, All Days */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onPushToErlang(
+                          futureSummary.nextWeekDailyAvg,
+                          futureSummary.nextWeekPeakDay?.dayKey ?? 'Mon'
+                        )
+                      }
+                      className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:border-sky-400 px-2 py-1 text-[11px] font-semibold transition cursor-pointer"
+                    >
+                      Avg Day ({futureSummary.nextWeekDailyAvg.toLocaleString()})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onPushToErlang(
+                          futureSummary.nextWeekPeakDay.volume,
+                          futureSummary.nextWeekPeakDay.dayKey,
+                          futureSummary.nextWeekPeakDay.dateIso
+                        )
+                      }
+                      className="rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 transition cursor-pointer"
+                    >
+                      Peak ({futureSummary.nextWeekPeakDay?.dayKey})
+                    </button>
+                    {onPlanMultiDayInErlang && (
+                      <button
+                        type="button"
+                        onClick={() => onPlanMultiDayInErlang('custom_days', 10)}
+                        className="rounded-lg border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20 px-2 py-1 text-[11px] font-semibold text-sky-700 dark:text-sky-300 transition cursor-pointer"
+                      >
+                        10d Intervals
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Card 2: Current Month Forecast (Days 1–30) */}
