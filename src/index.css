@@ -1,102 +1,455 @@
 @import "tailwindcss";
-
 @custom-variant dark (&:where(.dark, .dark *));
 
+:root {
+  --cnx-navy-darkest: #001421;
+  --cnx-navy-deep: #002136;
+  --cnx-navy-brand: #003d5b;
+  --cnx-teal-ocean: #007399;
+  --cnx-cyan-brand: #00a3e0;
+  --cnx-turquoise-brand: #25e2cc;
+  --cnx-mint-brand: #00c389;
+}
+
 @layer base {
-  :root {
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-
   body {
-    font-family: var(--font-sans);
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-    overflow-x: hidden;
+    background-color: #001421;
+    background-image:
+      radial-gradient(at 0% 0%, rgba(0, 163, 224, 0.16) 0px, transparent 48%),
+      radial-gradient(at 100% 0%, rgba(37, 226, 204, 0.13) 0px, transparent 48%),
+      radial-gradient(at 50% 100%, rgba(0, 61, 91, 0.35) 0px, transparent 55%),
+      linear-gradient(to right, rgba(0, 163, 224, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 163, 224, 0.06) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+    background-attachment: fixed;
+    color: #f0f9ff;
+    font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.25s ease, color 0.25s ease;
   }
 
-  .tabular-nums {
+  .font-mono {
+    font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-variant-numeric: tabular-nums;
-    font-family: var(--font-mono);
+  }
+
+  button,
+  [role="button"],
+  select,
+  label[for] {
+    cursor: pointer;
   }
 }
 
-@keyframes floatSlow {
+/* ============================================================================
+   CONCENTRIX BRAND PALETTE ENFORCEMENT (NIGHT & DAY MODES)
+   All surfaces, borders, buttons, and accents unified under Concentrix Logo DNA:
+   - Concentrix Deep Navy (#003D5B / #002136 / #001421)
+   - Concentrix Signature Cyan (#00A3E0)
+   - Concentrix Vibrant Turquoise & Mint (#25E2CC / #00C389)
+   ============================================================================ */
+
+/* Night Mode Concentrix Deep Navy Surfaces */
+html.dark .bg-slate-950 {
+  background-color: #001421 !important;
+}
+
+html.dark .bg-slate-900\/95 {
+  background-color: rgba(0, 26, 44, 0.95) !important;
+  border-color: rgba(0, 163, 224, 0.24) !important;
+}
+
+html.dark .bg-slate-900 {
+  background-color: #001e31 !important;
+}
+
+html.dark .bg-slate-800 {
+  background-color: #002b45 !important;
+}
+
+html.dark .border-slate-800,
+html.dark .border-slate-800\/80,
+html.dark .border-slate-700 {
+  border-color: rgba(0, 163, 224, 0.22) !important;
+}
+
+/* Remap Indigo & Amber utility classes to Concentrix Teal / Cyan / Turquoise */
+.bg-indigo-600,
+.bg-indigo-500,
+.bg-sky-600,
+.bg-sky-500 {
+  background: linear-gradient(135deg, #00a3e0 0%, #007399 100%) !important;
+  color: #ffffff !important;
+}
+
+.bg-indigo-500\/15,
+.bg-indigo-500\/10,
+.bg-indigo-500\/5 {
+  background-color: rgba(0, 163, 224, 0.14) !important;
+}
+
+.bg-amber-500 {
+  background: linear-gradient(135deg, #25e2cc 0%, #00c389 100%) !important;
+}
+
+.bg-amber-500\/15,
+.bg-amber-500\/10 {
+  background-color: rgba(37, 226, 204, 0.14) !important;
+}
+
+.from-indigo-500\/10 {
+  --tw-gradient-from: rgba(0, 163, 224, 0.12) !important;
+}
+
+.dark\:from-indigo-950\/40:where(.dark, .dark *) {
+  --tw-gradient-from: rgba(0, 61, 91, 0.45) !important;
+}
+
+.bg-indigo-600:hover,
+.bg-sky-600:hover {
+  background: linear-gradient(135deg, #19b5f0 0%, #0085ad 100%) !important;
+}
+
+.bg-emerald-600 {
+  background: linear-gradient(135deg, #00c389 0%, #0085ad 100%) !important;
+  color: #ffffff !important;
+}
+
+.bg-emerald-600:hover {
+  background: linear-gradient(135deg, #25e2cc 0%, #00a3e0 100%) !important;
+}
+
+.text-indigo-600,
+.text-indigo-400,
+.text-indigo-300,
+.dark\:text-indigo-400,
+.dark\:text-indigo-300 {
+  color: #00a3e0 !important;
+}
+
+.text-sky-600,
+.text-sky-400,
+.text-sky-300,
+.dark\:text-sky-400,
+.dark\:text-sky-300 {
+  color: #00a3e0 !important;
+}
+
+.text-emerald-600,
+.text-emerald-400,
+.text-emerald-300,
+.dark\:text-emerald-400,
+.dark\:text-emerald-300 {
+  color: #25e2cc !important;
+}
+
+.text-amber-600,
+.text-amber-400,
+.text-amber-300,
+.dark\:text-amber-400,
+.dark\:text-amber-300 {
+  color: #25e2cc !important;
+}
+
+.border-indigo-500\/30,
+.border-indigo-500\/40,
+.border-amber-500\/30,
+.border-amber-500\/40,
+.border-sky-500\/30,
+.border-sky-500\/35,
+.border-sky-500\/40 {
+  border-color: rgba(0, 163, 224, 0.38) !important;
+}
+
+.border-emerald-500\/30,
+.border-emerald-500\/35,
+.border-emerald-500\/40 {
+  border-color: rgba(37, 226, 204, 0.42) !important;
+}
+
+/* ============================================================================
+   CONCENTRIX DAY MODE ("المود الصباحي") — ICE TEAL, DEEP NAVY & TURQUOISE
+   ============================================================================ */
+html.light body {
+  background-color: #eef6fa !important;
+  background-image:
+    radial-gradient(at 0% 0%, rgba(0, 163, 224, 0.14) 0px, transparent 46%),
+    radial-gradient(at 100% 0%, rgba(37, 226, 204, 0.14) 0px, transparent 46%),
+    radial-gradient(at 50% 100%, rgba(0, 61, 91, 0.08) 0px, transparent 50%),
+    linear-gradient(to right, rgba(0, 115, 153, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 115, 153, 0.08) 1px, transparent 1px) !important;
+  background-size: 100% 100%, 100% 100%, 100% 100%, 40px 40px, 40px 40px !important;
+  color: #00263a !important;
+}
+
+html.light .bg-slate-50 {
+  background-color: #eef6fa !important;
+}
+
+html.light .bg-white,
+html.light .bg-white\/95,
+html.light .bg-slate-900,
+html.light .bg-slate-900\/95 {
+  background-color: #ffffff !important;
+  border-color: rgba(0, 115, 153, 0.22) !important;
+  box-shadow:
+    0 10px 26px -6px rgba(0, 61, 91, 0.08),
+    0 2px 6px -1px rgba(0, 61, 91, 0.05) !important;
+}
+
+html.light .bg-slate-950,
+html.light .bg-slate-950\/70,
+html.light .bg-slate-950\/60,
+html.light .bg-slate-950\/50,
+html.light .bg-slate-100,
+html.light .bg-slate-800 {
+  background-color: #f3f9fc !important;
+}
+
+html.light .border-slate-200,
+html.light .border-slate-300,
+html.light .border-slate-800,
+html.light .border-slate-700 {
+  border-color: rgba(0, 115, 153, 0.24) !important;
+}
+
+html.light .text-white,
+html.light .text-slate-900,
+html.light .text-slate-100,
+html.light .text-slate-200 {
+  color: #00263a !important;
+}
+
+html.light .text-slate-700,
+html.light .text-slate-600,
+html.light .text-slate-300 {
+  color: #003d5b !important;
+}
+
+html.light .text-slate-500,
+html.light .text-slate-400 {
+  color: #2b5c75 !important;
+}
+
+html.light .text-sky-600,
+html.light .text-sky-400,
+html.light .text-sky-300,
+html.light .text-indigo-600,
+html.light .text-indigo-400,
+html.light .text-indigo-300 {
+  color: #0077a8 !important;
+}
+
+html.light .text-emerald-600,
+html.light .text-emerald-400,
+html.light .text-emerald-300,
+html.light .text-amber-600,
+html.light .text-amber-400,
+html.light .text-amber-300 {
+  color: #008a6e !important;
+}
+
+/* Preserve white text inside primary Concentrix gradient buttons in Day Mode */
+html.light .bg-sky-600,
+html.light .bg-emerald-600,
+html.light .bg-indigo-600 {
+  color: #ffffff !important;
+}
+
+html.light .bg-sky-600 *,
+html.light .bg-emerald-600 *,
+html.light .bg-indigo-600 * {
+  color: #ffffff !important;
+}
+
+/* ============================================================================
+   UI/UX PRO MAX — CONCENTRIX 3D GLASS ICON BADGES & TOP SHIMMER BARS
+   ============================================================================ */
+.promax-icon-3d,
+.icon-badge-3d {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.875rem;
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    filter 0.2s ease;
+}
+
+.promax-badge-cyan,
+.promax-badge-blue,
+.promax-badge-violet,
+.promax-badge-amber {
+  background: linear-gradient(135deg, rgba(0, 163, 224, 0.22), rgba(0, 61, 91, 0.28));
+  border: 1px solid rgba(0, 163, 224, 0.45);
+  box-shadow: 0 6px 18px -4px rgba(0, 163, 224, 0.32), inset 0 1px 0 0 rgba(37, 226, 204, 0.24);
+}
+
+.promax-badge-emerald,
+.promax-badge-rose {
+  background: linear-gradient(135deg, rgba(37, 226, 204, 0.22), rgba(0, 163, 224, 0.16));
+  border: 1px solid rgba(37, 226, 204, 0.48);
+  box-shadow: 0 6px 18px -4px rgba(37, 226, 204, 0.32), inset 0 1px 0 0 rgba(255, 255, 255, 0.22);
+}
+
+.promax-icon-3d:hover,
+.icon-badge-3d:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 8px 22px -3px rgba(37, 226, 204, 0.42), inset 0 1px 0 0 rgba(255, 255, 255, 0.32);
+}
+
+/* Concentrix Bento Card Top Accent Bar */
+.bento-card-promax {
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.bento-card-promax::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.5px;
+  background: linear-gradient(90deg, #003d5b 0%, #00a3e0 50%, #25e2cc 100%);
+  opacity: 0.9;
+}
+
+@keyframes pulseGlow {
   0%, 100% {
-    transform: translateY(0px) rotate(0deg);
+    filter: drop-shadow(0 0 5px rgba(0, 163, 224, 0.38));
   }
   50% {
-    transform: translateY(-4px) rotate(2deg);
+    filter: drop-shadow(0 0 12px rgba(37, 226, 204, 0.72));
   }
 }
 
-@keyframes pulseRing {
-  0% {
-    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.45);
+@keyframes cnxOrbitCw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes cnxOrbitCcw {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+@keyframes cnxBarPulse {
+  0%, 100% { transform: scaleY(1); opacity: 0.9; }
+  50% { transform: scaleY(0.68); opacity: 1; }
+}
+
+@keyframes cnxFloat {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-2.5px); }
+}
+
+@keyframes cnxStreamRight {
+  from { stroke-dashoffset: 10; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes cnxNodeBlink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.84); }
+}
+
+.animate-icon-glow {
+  animation: pulseGlow 2.8s ease-in-out infinite;
+}
+
+.cnx-orbit-cw {
+  animation: cnxOrbitCw 9s linear infinite;
+}
+
+.cnx-orbit-ccw {
+  animation: cnxOrbitCcw 6.5s linear infinite;
+}
+
+.cnx-bar-pulse-1 {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: cnxBarPulse 1.6s ease-in-out infinite;
+}
+
+.cnx-bar-pulse-2 {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: cnxBarPulse 1.6s ease-in-out 0.35s infinite;
+}
+
+.cnx-bar-pulse-3 {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: cnxBarPulse 1.6s ease-in-out 0.7s infinite;
+}
+
+.cnx-float-badge .cnx-icon-inner,
+.cnx-float-icon {
+  animation: cnxFloat 2.4s ease-in-out infinite;
+}
+
+.cnx-stream-right {
+  animation: cnxStreamRight 0.9s linear infinite;
+}
+
+.cnx-node-blink-1 {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cnxNodeBlink 1.8s ease-in-out infinite;
+}
+
+.cnx-node-blink-2 {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cnxNodeBlink 1.8s ease-in-out 0.4s infinite;
+}
+
+.cnx-node-blink-3 {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cnxNodeBlink 1.8s ease-in-out 0.8s infinite;
+}
+
+.cnx-breathe {
+  animation: pulseGlow 2.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-icon-glow,
+  .cnx-orbit-cw,
+  .cnx-orbit-ccw,
+  .cnx-bar-pulse-1,
+  .cnx-bar-pulse-2,
+  .cnx-bar-pulse-3,
+  .cnx-float-badge .cnx-icon-inner,
+  .cnx-float-icon,
+  .cnx-stream-right,
+  .cnx-node-blink-1,
+  .cnx-node-blink-2,
+  .cnx-node-blink-3 {
+    animation: none !important;
   }
-  70% {
-    box-shadow: 0 0 0 10px rgba(14, 165, 233, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0);
-  }
 }
 
-@keyframes slideUpFade {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-@keyframes shimmerSweep {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
+::-webkit-scrollbar-track {
+  background: rgba(0, 20, 33, 0.4);
 }
 
-.animate-float {
-  animation: floatSlow 3.6s ease-in-out infinite;
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 163, 224, 0.45);
+  border-radius: 4px;
 }
 
-.animate-pulse-ring {
-  animation: pulseRing 2.4s infinite;
-}
-
-.animate-slide-up {
-  animation: slideUpFade 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.card-elevated {
-  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s ease, border-color 0.22s ease;
-}
-
-.card-elevated:hover {
-  transform: translateY(-2px);
-}
-
-.icon-badge-glow {
-  position: relative;
-  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.card-elevated:hover .icon-badge-glow,
-button:hover .icon-badge-glow {
-  transform: scale(1.1) rotate(-4deg);
-}
-
-@media print {
-  .no-print {
-    display: none !important;
-  }
-  body {
-    background: #ffffff !important;
-    color: #0f172a !important;
-  }
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(37, 226, 204, 0.75);
 }

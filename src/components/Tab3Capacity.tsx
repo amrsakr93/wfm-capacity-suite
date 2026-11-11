@@ -3,7 +3,6 @@ import {
   Users,
   Layers,
   ShieldCheck,
-  Sparkles,
   Grid,
   Download,
   Printer,
@@ -12,12 +11,18 @@ import {
 import type {
   CapacityConfig,
   CapacityResult,
+  ErlangConfig,
   WhatIfCell,
 } from '../engine/types.ts';
+import { solveRequiredAgents } from '../engine/erlang.ts';
+import { SmartNumberInput } from './SmartNumberInput.tsx';
+import { CapacityWaterfallIcon, AgentPrecisionIcon, ProMaxIconBadge } from './ProMaxIcons.tsx';
 
 interface Props {
   config: CapacityConfig;
   setConfig: React.Dispatch<React.SetStateAction<CapacityConfig>>;
+  erlangConfig: ErlangConfig;
+  setErlangConfig: React.Dispatch<React.SetStateAction<ErlangConfig>>;
   result: CapacityResult;
   whatIfMatrix: WhatIfCell[][];
   shrinkageDeltas: number[];
@@ -30,13 +35,14 @@ interface Props {
   setHoops: (h: number) => void;
   slTargetPct: number;
   slThresholdSec: number;
-  onLoadCnxBenchmark: () => void;
   onExportExcel: () => void;
 }
 
 export const Tab3Capacity: React.FC<Props> = ({
   config,
   setConfig,
+  erlangConfig,
+  setErlangConfig,
   result,
   whatIfMatrix,
   shrinkageDeltas,
@@ -49,53 +55,198 @@ export const Tab3Capacity: React.FC<Props> = ({
   setHoops,
   slTargetPct,
   slThresholdSec,
-  onLoadCnxBenchmark,
   onExportExcel,
 }) => {
   const maxWaterfallFte = Math.max(...result.waterfall.map((w) => w.fte), 1);
-  const dailyOfferedFromMonth = monthlyVolume / Math.max(1, monthDays);
-  const hourlyVolFromMonth = dailyOfferedFromMonth / Math.max(1, hoops);
-  const reqPerHourEquiv = result.baseRequiredProductiveHoursPerDay / Math.max(1, hoops);
+
+  // Live Monthly Cap Plan Erlang C calculation (Spreadsheet Parity: e.g. 81,563 -> 2,719/d -> 113.28/hr -> 13/hr -> 312h/d -> 79 Agents)
+  const safeDays = Math.max(1, monthDays);
+  const safeHoops = Math.max(1, Math.min(24, hoops));
+  const dailyOfferedFromMonth = monthlyVolume / safeDays;
+  const hourlyVolFromMonth = dailyOfferedFromMonth / safeHoops;
+
+  const liveHourlySolved = solveRequiredAgents(hourlyVolFromMonth, erlangConfig.globalAhtSec, 3600, {
+    ...erlangConfig,
+    enforceMaxAsa: false,
+    enforceOccupancyCap: false,
+  });
+
+  const reqPerHourFromMonth =
+    erlangConfig.agentMode === 'fractional'
+      ? liveHourlySolved.fractionalSeats
+      : liveHourlySolved.integerSeats;
+  const reqHoursPerDayFromMonth = reqPerHourFromMonth * safeHoops;
+
+  // Helper to sync Monthly Cap Plan edits immediately into CapacityConfig & ErlangConfig
+  const syncMonthlyCapPlanToSuite = (
+    nextMonthly: number,
+    nextDays: number,
+    nextHoops: number,
+    nextErlang: ErlangConfig
+  ) => {
+    const dOff = nextMonthly / Math.max(1, nextDays);
+    const hOff = dOff / Math.max(1, Math.min(24, nextHoops));
+    const solved = solveRequiredAgents(hOff, nextErlang.globalAhtSec, 3600, {
+      ...nextErlang,
+      enforceMaxAsa: false,
+      enforceOccupancyCap: false,
+    });
+    const reqHr =
+      nextErlang.agentMode === 'fractional' ? solved.fractionalSeats : solved.integerSeats;
+    const prodHrsDay = reqHr * Math.max(1, Math.min(24, nextHoops));
+    const pureTalkDay = (dOff * nextErlang.globalAhtSec) / 3600;
+
+    setConfig((c) => ({
+      ...c,
+      route: 'erlang_c',
+      erlangProductiveHoursPerDay: Number(prodHrsDay.toFixed(2)),
+      pureTalkHoursPerDay: Number(pureTalkDay.toFixed(2)),
+    }));
+  };
+
+  // Scale In-Office or Out-of-Office Shrinkage breakdown when edited directly in the Cap Plan row
+  const setDirectInOfficeShrinkage = (targetPct: number) => {
+    const clamped = Math.max(0, Math.min(80, targetPct));
+    setConfig((c) => {
+      const curSum =
+        c.inOfficeBreakdown.trainingCoachingPct +
+        c.inOfficeBreakdown.meetingsHuddlesPct +
+        c.inOfficeBreakdown.systemDowntimePct +
+        c.inOfficeBreakdown.paidBreaksPct;
+      if (curSum <= 1e-6) {
+        return {
+          ...c,
+          inOfficeBreakdown: {
+            trainingCoachingPct: Number((clamped * 0.5).toFixed(2)),
+            meetingsHuddlesPct: Number((clamped * 0.5).toFixed(2)),
+            systemDowntimePct: 0,
+            paidBreaksPct: 0,
+          },
+        };
+      }
+      const ratio = clamped / curSum;
+      return {
+        ...c,
+        inOfficeBreakdown: {
+          trainingCoachingPct: Number((c.inOfficeBreakdown.trainingCoachingPct * ratio).toFixed(2)),
+          meetingsHuddlesPct: Number((c.inOfficeBreakdown.meetingsHuddlesPct * ratio).toFixed(2)),
+          systemDowntimePct: Number((c.inOfficeBreakdown.systemDowntimePct * ratio).toFixed(2)),
+          paidBreaksPct: Number((c.inOfficeBreakdown.paidBreaksPct * ratio).toFixed(2)),
+        },
+      };
+    });
+  };
+
+  const setDirectOutOfOfficeShrinkage = (targetPct: number) => {
+    const clamped = Math.max(0, Math.min(80, targetPct));
+    setConfig((c) => {
+      const curSum =
+        c.outOfOfficeBreakdown.annualLeavePct +
+        c.outOfOfficeBreakdown.sickLeavePct +
+        c.outOfOfficeBreakdown.publicHolidaysPct +
+        c.outOfOfficeBreakdown.unplannedAbsencePct;
+      if (curSum <= 1e-6) {
+        return {
+          ...c,
+          outOfOfficeBreakdown: {
+            annualLeavePct: Number((clamped * 0.5).toFixed(2)),
+            sickLeavePct: Number((clamped * 0.5).toFixed(2)),
+            publicHolidaysPct: 0,
+            unplannedAbsencePct: 0,
+          },
+        };
+      }
+      const ratio = clamped / curSum;
+      return {
+        ...c,
+        outOfOfficeBreakdown: {
+          annualLeavePct: Number((c.outOfOfficeBreakdown.annualLeavePct * ratio).toFixed(2)),
+          sickLeavePct: Number((c.outOfOfficeBreakdown.sickLeavePct * ratio).toFixed(2)),
+          publicHolidaysPct: Number((c.outOfOfficeBreakdown.publicHolidaysPct * ratio).toFixed(2)),
+          unplannedAbsencePct: Number((c.outOfOfficeBreakdown.unplannedAbsencePct * ratio).toFixed(2)),
+        },
+      };
+    });
+  };
+
+  // Cap Plan Sheet derived steps from live reqHoursPerDayFromMonth
   const inOfficeProdHoursPerShift =
     result.effectivePaidShiftHours * (1 - result.inOfficeShrinkagePct / 100);
   const reqPerDayAfterInOffice =
-    inOfficeProdHoursPerShift > 0
-      ? result.baseRequiredProductiveHoursPerDay / inOfficeProdHoursPerShift
-      : 0;
+    inOfficeProdHoursPerShift > 0 ? reqHoursPerDayFromMonth / inOfficeProdHoursPerShift : 0;
   const reqPerWeekAfterInOffice = reqPerDayAfterInOffice * result.weeklyCoverageMultiplier;
+  const scheduledAfterInflexFromMonth =
+    reqPerWeekAfterInOffice * (1 + config.scheduleInefficiencyPct / 100);
+  const outRetention = Math.max(0.05, 1 - result.outOfOfficeShrinkagePct / 100);
+  const finalCapPlanAgentsExact =
+    (scheduledAfterInflexFromMonth / outRetention) * (1 + config.attritionRampBufferPct / 100);
 
   return (
     <div className="space-y-6 animate-slide-up">
       {/* Executive Monthly Cap Plan Step-by-Step Sheet ("التقسيمة والتنفيطة الشهرية") */}
-      <div className="card-elevated rounded-2xl border-2 border-emerald-500/35 bg-gradient-to-r from-emerald-500/10 via-white to-sky-500/5 dark:from-emerald-950/35 dark:via-slate-900 dark:to-sky-950/20 p-5 shadow-xs">
+      <div className="bento-card-promax card-elevated rounded-2xl border-2 border-emerald-500/35 bg-gradient-to-r from-emerald-500/10 via-white to-sky-500/5 dark:from-emerald-950/35 dark:via-slate-900 dark:to-sky-950/20 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 border-b border-slate-200/80 dark:border-slate-800">
           <div className="flex items-start gap-3">
-            <div className="icon-badge-glow w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/25">
-              <Layers className="w-5 h-5 animate-float" />
-            </div>
+            <ProMaxIconBadge tone="emerald" size="lg" pulse>
+              <CapacityWaterfallIcon size={24} />
+            </ProMaxIconBadge>
             <div>
               <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                 Executive Monthly Cap Plan Breakdown (Monthly → Daily → Hourly → Final Agents Required)
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Complete step-by-step volume &amp; headcount decomposition matching your standard Capacity Plan spreadsheet.
+                Type or paste any value directly below. Switch between{' '}
+                <strong>Integer Agents (=Agents)</strong> and{' '}
+                <strong>Fractional Agents (=FractionalAgents)</strong> at any time.
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={onLoadCnxBenchmark}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 px-3.5 py-1.5 text-xs font-bold transition cursor-pointer"
+            {/* Agent vs Fractional Agents Toggle inside Capacity Plan */}
+            <div
+              role="group"
+              aria-label="Capacity Plan Agent Mode"
+              className="inline-flex rounded-xl border-2 border-sky-500/30 bg-slate-100 dark:bg-slate-950 p-1"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              Load 62,245 Monthly Benchmark (→ 60 Agents)
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = { ...erlangConfig, agentMode: 'integer' as const };
+                  setErlangConfig(next);
+                  syncMonthlyCapPlanToSuite(monthlyVolume, monthDays, hoops, next);
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  (erlangConfig.agentMode ?? 'integer') === 'integer'
+                    ? 'bg-sky-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <AgentPrecisionIcon fractional={false} size={15} />
+                Integer Agents (=Agents)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = { ...erlangConfig, agentMode: 'fractional' as const };
+                  setErlangConfig(next);
+                  syncMonthlyCapPlanToSuite(monthlyVolume, monthDays, hoops, next);
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  erlangConfig.agentMode === 'fractional'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <AgentPrecisionIcon fractional={true} size={15} />
+                Fractional (=FractionalAgents)
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={onExportExcel}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-xs cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3.5 py-2 text-xs font-semibold shadow-xs cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               Export .xlsx
@@ -103,66 +254,136 @@ export const Tab3Capacity: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* 16-Cell Structured Cap Plan Grid */}
+        {/* 16-Cell Structured Cap Plan Grid (Live Self-Contained Recalculation) */}
         <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs">
-          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Monthly Offered</div>
-            <input
-              type="number"
+          <div className="rounded-xl border border-emerald-500/40 bg-white dark:bg-slate-950 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-emerald-600 dark:text-emerald-400">
+              Monthly Offered
+            </div>
+            <SmartNumberInput
+              min={0}
+              decimals={0}
               value={monthlyVolume}
-              onChange={(e) => setMonthlyVolume(Math.max(0, Number(e.target.value) || 0))}
+              onChange={(v) => {
+                const mv = Math.max(0, v);
+                setMonthlyVolume(mv);
+                setErlangConfig((c) => ({
+                  ...c,
+                  dailyVolume: Math.round(mv / Math.max(1, monthDays)),
+                }));
+                syncMonthlyCapPlanToSuite(mv, monthDays, hoops, erlangConfig);
+              }}
               className="mt-1 w-full rounded border border-emerald-500/40 bg-emerald-500/5 px-1.5 py-0.5 text-sm font-extrabold tabular-nums text-emerald-600 dark:text-emerald-300"
             />
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">Month Days</div>
-            <input
-              type="number"
+            <SmartNumberInput
               min={1}
               max={31}
+              decimals={0}
               value={monthDays}
-              onChange={(e) => setMonthDays(Math.max(1, Number(e.target.value) || 30))}
+              onChange={(v) => {
+                const md = Math.max(1, Math.min(31, Math.round(v)));
+                setMonthDays(md);
+                setErlangConfig((c) => ({
+                  ...c,
+                  dailyVolume: Math.round(monthlyVolume / md),
+                }));
+                syncMonthlyCapPlanToSuite(monthlyVolume, md, hoops, erlangConfig);
+              }}
               className="mt-1 w-full rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1.5 py-0.5 text-sm font-bold tabular-nums"
             />
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">Daily Offered</div>
             <div className="mt-1.5 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
               {Math.round(dailyOfferedFromMonth).toLocaleString()}
             </div>
+            <div className="text-[10px] font-mono text-slate-400">
+              ({dailyOfferedFromMonth.toFixed(1)}/d)
+            </div>
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">HOOPS (Hrs)</div>
-            <input
-              type="number"
+            <SmartNumberInput
               min={1}
               max={24}
+              decimals={0}
               value={hoops}
-              onChange={(e) => setHoops(Math.max(1, Math.min(24, Number(e.target.value) || 24)))}
+              onChange={(v) => {
+                const h = Math.max(1, Math.min(24, v));
+                setHoops(h);
+                syncMonthlyCapPlanToSuite(monthlyVolume, monthDays, h, erlangConfig);
+              }}
               className="mt-1 w-full rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1.5 py-0.5 text-sm font-bold tabular-nums"
             />
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">Hourly Volume</div>
             <div className="mt-1.5 text-sm font-extrabold tabular-nums text-sky-600 dark:text-sky-400">
               {Math.round(hourlyVolFromMonth).toLocaleString()}{' '}
-              <span className="text-[10px] font-normal">({hourlyVolFromMonth.toFixed(1)})</span>
+              <span className="text-[10px] font-normal">({hourlyVolFromMonth.toFixed(2)})</span>
             </div>
           </div>
-          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
-            <div className="text-[10px] font-bold uppercase text-slate-400">SLA / ASA / AHT</div>
-            <div className="mt-1.5 text-xs font-bold tabular-nums text-slate-800 dark:text-slate-200">
-              {slTargetPct}% / {slThresholdSec}s / {baseGlobalAhtSec}s
+
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">SLA % / ASA / AHT</div>
+            <div className="mt-1 grid grid-cols-3 gap-1">
+              <SmartNumberInput
+                min={1}
+                max={99.9}
+                decimals={0}
+                value={slTargetPct}
+                onChange={(v) => {
+                  const next = { ...erlangConfig, slTargetPct: Math.min(99.9, Math.max(1, v)) };
+                  setErlangConfig(next);
+                  syncMonthlyCapPlanToSuite(monthlyVolume, monthDays, hoops, next);
+                }}
+                className="w-full rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1 py-0.5 text-[11px] font-bold tabular-nums text-center"
+              />
+              <SmartNumberInput
+                min={1}
+                decimals={0}
+                value={slThresholdSec}
+                onChange={(v) => {
+                  const next = { ...erlangConfig, slThresholdSec: Math.max(1, v) };
+                  setErlangConfig(next);
+                  syncMonthlyCapPlanToSuite(monthlyVolume, monthDays, hoops, next);
+                }}
+                className="w-full rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1 py-0.5 text-[11px] font-bold tabular-nums text-center"
+              />
+              <SmartNumberInput
+                min={1}
+                decimals={0}
+                value={baseGlobalAhtSec}
+                onChange={(v) => {
+                  const next = { ...erlangConfig, globalAhtSec: Math.max(1, v) };
+                  setErlangConfig(next);
+                  syncMonthlyCapPlanToSuite(monthlyVolume, monthDays, hoops, next);
+                }}
+                className="w-full rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1 py-0.5 text-[11px] font-bold tabular-nums text-center"
+              />
             </div>
           </div>
+
           <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-2.5">
             <div className="text-[10px] font-bold uppercase text-sky-600 dark:text-sky-300">
               Required / Hr &amp; Day
             </div>
             <div className="mt-1.5 text-xs font-extrabold tabular-nums text-sky-700 dark:text-sky-200">
-              {reqPerHourEquiv.toFixed(1)}/hr · {result.baseRequiredProductiveHoursPerDay.toFixed(0)}h/d
+              {reqPerHourFromMonth.toFixed(erlangConfig.agentMode === 'fractional' ? 2 : 0)}/hr ·{' '}
+              {reqHoursPerDayFromMonth.toFixed(erlangConfig.agentMode === 'fractional' ? 1 : 0)}h/d
+            </div>
+            <div className="text-[9px] font-mono text-sky-600/80 dark:text-sky-300/80">
+              Int: {liveHourlySolved.integerSeats} · Frac: {liveHourlySolved.fractionalSeats}
             </div>
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">
               Work − Break = Login
@@ -176,68 +397,102 @@ export const Tab3Capacity: React.FC<Props> = ({
 
         {/* Second Row of Cap Plan Breakdown */}
         <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs">
-          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">
-              In-Office Shrinkage
+              In-Office Shrinkage (%)
             </div>
-            <div className="mt-1 text-sm font-bold tabular-nums text-amber-600 dark:text-amber-400">
-              {result.inOfficeShrinkagePct.toFixed(1)}%
-            </div>
+            <SmartNumberInput
+              min={0}
+              max={80}
+              decimals={1}
+              value={Number(result.inOfficeShrinkagePct.toFixed(2))}
+              onChange={setDirectInOfficeShrinkage}
+              className="mt-1 w-full rounded border border-amber-500/40 bg-amber-500/5 px-1.5 py-0.5 text-sm font-bold tabular-nums text-amber-600 dark:text-amber-400"
+            />
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">
               Productive Hrs / Agent
             </div>
-            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+            <div className="mt-1.5 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
               {inOfficeProdHoursPerShift.toFixed(2)} hrs
             </div>
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">
               Required / Day (Seats)
             </div>
-            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+            <div className="mt-1.5 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
               {Math.round(reqPerDayAfterInOffice)}{' '}
               <span className="text-[10px] font-normal text-slate-400">
                 ({reqPerDayAfterInOffice.toFixed(2)})
               </span>
             </div>
           </div>
+
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">
               Required / Week (×{config.operatingDaysPerWeek}/{config.agentWorkdaysPerWeek})
             </div>
-            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+            <div className="mt-1.5 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
               {Math.round(reqPerWeekAfterInOffice)}{' '}
               <span className="text-[10px] font-normal text-slate-400">
                 ({reqPerWeekAfterInOffice.toFixed(2)})
               </span>
             </div>
           </div>
-          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
             <div className="text-[10px] font-bold uppercase text-slate-400">
-              Schedule Inflex (+{config.scheduleInefficiencyPct}%)
+              Schedule Inflex (+%) → #
             </div>
-            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
-              {Math.round(result.scheduledSeatsAfterInflex)}{' '}
-              <span className="text-[10px] font-normal text-slate-400">
-                ({result.scheduledSeatsAfterInflex.toFixed(2)})
+            <div className="mt-1 flex items-center justify-between gap-1.5">
+              <SmartNumberInput
+                min={0}
+                max={50}
+                decimals={1}
+                value={config.scheduleInefficiencyPct}
+                onChange={(v) =>
+                  setConfig((c) => ({ ...c, scheduleInefficiencyPct: Math.max(0, v) }))
+                }
+                className="w-14 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1.5 py-0.5 text-xs font-bold tabular-nums"
+              />
+              <span className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+                {Math.round(scheduledAfterInflexFromMonth)}{' '}
+                <span className="text-[10px] font-normal text-slate-400">
+                  ({scheduledAfterInflexFromMonth.toFixed(1)})
+                </span>
               </span>
             </div>
           </div>
+
           <div className="rounded-xl border-2 border-emerald-500 bg-emerald-500/15 p-2.5">
-            <div className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-300">
-              Agents Required [A] (÷{100 - result.outOfOfficeShrinkagePct}% Out)
+            <div className="flex items-center justify-between text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-300">
+              <span>Agents Required [A]</span>
+              <span className="inline-flex items-center gap-1">
+                Out%:
+                <SmartNumberInput
+                  min={0}
+                  max={80}
+                  decimals={1}
+                  value={Number(result.outOfOfficeShrinkagePct.toFixed(1))}
+                  onChange={setDirectOutOfOfficeShrinkage}
+                  className="w-11 rounded border border-emerald-500/40 bg-white/80 dark:bg-slate-900 px-1 py-0 text-[10px] font-bold text-center"
+                />
+              </span>
             </div>
             <div className="mt-1 text-lg font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
-              {Math.round(result.finalGrossFte)} Agents{' '}
+              {Math.round(finalCapPlanAgentsExact)} Agents{' '}
               <span className="text-xs font-semibold">
-                ({result.finalGrossFte.toFixed(1)})
+                ({finalCapPlanAgentsExact.toFixed(2)})
               </span>
             </div>
           </div>
         </div>
       </div>
+
       {/* Executive Gross Headcount Banner */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
@@ -248,7 +503,7 @@ export const Tab3Capacity: React.FC<Props> = ({
             {result.baseRequiredProductiveHoursPerDay.toFixed(1)} <span className="text-xs font-normal">hrs</span>
           </div>
           <div className="mt-0.5 text-[11px] text-slate-400">
-            {config.route === 'erlang_c' ? 'From Tab 2 Erlang C' : 'Flat Top-Down Route'}
+            {config.route === 'erlang_c' ? 'Synced with Erlang C' : 'Flat Top-Down Route'}
           </div>
         </div>
 
@@ -307,7 +562,7 @@ export const Tab3Capacity: React.FC<Props> = ({
           <div className="mt-1 text-2xl font-bold tabular-nums text-emerald-700 dark:text-emerald-300">
             {result.finalGrossFte.toFixed(1)}{' '}
             <span className="text-xs font-semibold">
-              (⌈{Math.ceil(result.finalGrossFte)}⌉)
+              ([{Math.round(result.finalGrossFte)}])
             </span>
           </div>
           <div className="mt-0.5 text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
@@ -330,14 +585,6 @@ export const Tab3Capacity: React.FC<Props> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={onLoadCnxBenchmark}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20 text-sky-700 dark:text-sky-300 px-3 py-1.5 text-xs font-medium cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Load Cap Plan Benchmark (240h → 60 FTE)
-            </button>
             <button
               type="button"
               onClick={onExportExcel}
@@ -371,24 +618,23 @@ export const Tab3Capacity: React.FC<Props> = ({
               }
               className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-medium"
             >
-              <option value="erlang_c">Erlang C Route (Uses Tab 2 Prod Hours)</option>
+              <option value="erlang_c">Erlang C Route (Uses Productive Hours)</option>
               <option value="flat_top_down">Flat Top-Down (Pure Talk ÷ Target Occ %)</option>
             </select>
 
             {config.route === 'erlang_c' ? (
               <div>
                 <label className="block text-[11px] text-slate-500 mb-1">
-                  Required Productive Hours / Day (Tab 2)
+                  Required Productive Hours / Day
                 </label>
-                <input
-                  type="number"
-                  step={0.5}
+                <SmartNumberInput
                   min={0}
+                  decimals={2}
                   value={Number(config.erlangProductiveHoursPerDay.toFixed(2))}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      erlangProductiveHoursPerDay: Math.max(0, Number(e.target.value) || 0),
+                      erlangProductiveHoursPerDay: Math.max(0, v),
                     }))
                   }
                   className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs tabular-nums font-semibold"
@@ -398,14 +644,14 @@ export const Tab3Capacity: React.FC<Props> = ({
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-1">Pure Talk Hrs</label>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
+                    min={0}
+                    decimals={2}
                     value={Number(config.pureTalkHoursPerDay.toFixed(2))}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
-                        pureTalkHoursPerDay: Math.max(0, Number(e.target.value) || 0),
+                        pureTalkHoursPerDay: Math.max(0, v),
                       }))
                     }
                     className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs tabular-nums"
@@ -413,15 +659,15 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-1">Target Occ %</label>
-                  <input
-                    type="number"
+                  <SmartNumberInput
                     min={50}
                     max={98}
+                    decimals={1}
                     value={config.flatTargetOccupancyPct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
-                        flatTargetOccupancyPct: Math.max(50, Math.min(98, Number(e.target.value) || 85)),
+                        flatTargetOccupancyPct: Math.max(50, Math.min(98, v)),
                       }))
                     }
                     className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs tabular-nums"
@@ -454,16 +700,15 @@ export const Tab3Capacity: React.FC<Props> = ({
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-1">Working Shift (h)</label>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={1}
                     max={16}
+                    decimals={2}
                     value={config.grossShiftHours}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
-                        grossShiftHours: Math.max(1, Number(e.target.value) || 9),
+                        grossShiftHours: Math.max(1, v),
                       }))
                     }
                     className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs tabular-nums"
@@ -471,16 +716,15 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-500 mb-1">Unpaid Break (h)</label>
-                  <input
-                    type="number"
-                    step={0.25}
+                  <SmartNumberInput
                     min={0}
                     max={4}
+                    decimals={2}
                     value={config.unpaidBreakHours}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
-                        unpaidBreakHours: Math.max(0, Number(e.target.value) || 0),
+                        unpaidBreakHours: Math.max(0, v),
                       }))
                     }
                     className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs tabular-nums"
@@ -492,19 +736,18 @@ export const Tab3Capacity: React.FC<Props> = ({
                 <label className="block text-[11px] text-slate-500 mb-1">
                   Paid / Login Shift Hours (Excl. Unpaid Lunch)
                 </label>
-                <input
-                  type="number"
-                  step={0.25}
+                <SmartNumberInput
                   min={1}
                   max={16}
+                  decimals={2}
                   value={config.paidShiftHoursDirect}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      paidShiftHoursDirect: Math.max(1, Number(e.target.value) || 8),
+                      paidShiftHoursDirect: Math.max(1, v),
                     }))
                   }
-                  className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs tabular-nums"
+                  className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs tabular-nums"
                 />
               </div>
             )}
@@ -523,16 +766,15 @@ export const Tab3Capacity: React.FC<Props> = ({
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-[11px] text-slate-500 mb-1">Center Days/Wk</label>
-                <input
-                  type="number"
+                <SmartNumberInput
                   min={1}
                   max={7}
-                  step={0.5}
+                  decimals={1}
                   value={config.operatingDaysPerWeek}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      operatingDaysPerWeek: Math.max(1, Math.min(7, Number(e.target.value) || 7)),
+                      operatingDaysPerWeek: Math.max(1, Math.min(7, v)),
                     }))
                   }
                   className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs tabular-nums"
@@ -540,16 +782,15 @@ export const Tab3Capacity: React.FC<Props> = ({
               </div>
               <div>
                 <label className="block text-[11px] text-slate-500 mb-1">Agent Days/Wk</label>
-                <input
-                  type="number"
+                <SmartNumberInput
                   min={1}
                   max={7}
-                  step={0.5}
+                  decimals={1}
                   value={config.agentWorkdaysPerWeek}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      agentWorkdaysPerWeek: Math.max(1, Math.min(7, Number(e.target.value) || 5)),
+                      agentWorkdaysPerWeek: Math.max(1, Math.min(7, v)),
                     }))
                   }
                   className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs tabular-nums"
@@ -560,16 +801,15 @@ export const Tab3Capacity: React.FC<Props> = ({
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-[11px] text-slate-500 mb-1">Sched Inflex %</label>
-                <input
-                  type="number"
-                  step={0.5}
+                <SmartNumberInput
                   min={0}
                   max={40}
+                  decimals={1}
                   value={config.scheduleInefficiencyPct}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      scheduleInefficiencyPct: Math.max(0, Number(e.target.value) || 0),
+                      scheduleInefficiencyPct: Math.max(0, v),
                     }))
                   }
                   className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs tabular-nums"
@@ -577,16 +817,15 @@ export const Tab3Capacity: React.FC<Props> = ({
               </div>
               <div>
                 <label className="block text-[11px] text-slate-500 mb-1">Ramp Buffer %</label>
-                <input
-                  type="number"
-                  step={0.5}
+                <SmartNumberInput
                   min={0}
                   max={40}
+                  decimals={1}
                   value={config.attritionRampBufferPct}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      attritionRampBufferPct: Math.max(0, Number(e.target.value) || 0),
+                      attritionRampBufferPct: Math.max(0, v),
                     }))
                   }
                   className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs tabular-nums"
@@ -607,17 +846,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </span>
                 <label className="flex justify-between items-center mb-1">
                   <span>Coaching/Train</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.inOfficeBreakdown.trainingCoachingPct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         inOfficeBreakdown: {
                           ...c.inOfficeBreakdown,
-                          trainingCoachingPct: Math.max(0, Number(e.target.value) || 0),
+                          trainingCoachingPct: Math.max(0, v),
                         },
                       }))
                     }
@@ -626,17 +864,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </label>
                 <label className="flex justify-between items-center mb-1">
                   <span>Meetings</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.inOfficeBreakdown.meetingsHuddlesPct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         inOfficeBreakdown: {
                           ...c.inOfficeBreakdown,
-                          meetingsHuddlesPct: Math.max(0, Number(e.target.value) || 0),
+                          meetingsHuddlesPct: Math.max(0, v),
                         },
                       }))
                     }
@@ -645,17 +882,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </label>
                 <label className="flex justify-between items-center mb-1">
                   <span>Sys Downtime</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.inOfficeBreakdown.systemDowntimePct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         inOfficeBreakdown: {
                           ...c.inOfficeBreakdown,
-                          systemDowntimePct: Math.max(0, Number(e.target.value) || 0),
+                          systemDowntimePct: Math.max(0, v),
                         },
                       }))
                     }
@@ -664,17 +900,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </label>
                 <label className="flex justify-between items-center">
                   <span>Paid Breaks</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.inOfficeBreakdown.paidBreaksPct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         inOfficeBreakdown: {
                           ...c.inOfficeBreakdown,
-                          paidBreaksPct: Math.max(0, Number(e.target.value) || 0),
+                          paidBreaksPct: Math.max(0, v),
                         },
                       }))
                     }
@@ -689,17 +924,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </span>
                 <label className="flex justify-between items-center mb-1">
                   <span>Annual PTO</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.outOfOfficeBreakdown.annualLeavePct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         outOfOfficeBreakdown: {
                           ...c.outOfOfficeBreakdown,
-                          annualLeavePct: Math.max(0, Number(e.target.value) || 0),
+                          annualLeavePct: Math.max(0, v),
                         },
                       }))
                     }
@@ -708,17 +942,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </label>
                 <label className="flex justify-between items-center mb-1">
                   <span>Sick Leave</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.outOfOfficeBreakdown.sickLeavePct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         outOfOfficeBreakdown: {
                           ...c.outOfOfficeBreakdown,
-                          sickLeavePct: Math.max(0, Number(e.target.value) || 0),
+                          sickLeavePct: Math.max(0, v),
                         },
                       }))
                     }
@@ -727,17 +960,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </label>
                 <label className="flex justify-between items-center mb-1">
                   <span>Public Hol</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.outOfOfficeBreakdown.publicHolidaysPct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         outOfOfficeBreakdown: {
                           ...c.outOfOfficeBreakdown,
-                          publicHolidaysPct: Math.max(0, Number(e.target.value) || 0),
+                          publicHolidaysPct: Math.max(0, v),
                         },
                       }))
                     }
@@ -746,17 +978,16 @@ export const Tab3Capacity: React.FC<Props> = ({
                 </label>
                 <label className="flex justify-between items-center">
                   <span>Unplanned</span>
-                  <input
-                    type="number"
-                    step={0.5}
+                  <SmartNumberInput
                     min={0}
+                    decimals={2}
                     value={config.outOfOfficeBreakdown.unplannedAbsencePct}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setConfig((c) => ({
                         ...c,
                         outOfOfficeBreakdown: {
                           ...c.outOfOfficeBreakdown,
-                          unplannedAbsencePct: Math.max(0, Number(e.target.value) || 0),
+                          unplannedAbsencePct: Math.max(0, v),
                         },
                       }))
                     }
@@ -784,7 +1015,7 @@ export const Tab3Capacity: React.FC<Props> = ({
               </p>
             </div>
             <span className="text-xs font-mono px-2.5 py-1 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
-              Ceiling: {Math.ceil(result.finalGrossFte)} Agents
+              Final: {Math.round(result.finalGrossFte)} Agents ({result.finalGrossFte.toFixed(1)})
             </span>
           </div>
 
@@ -913,4 +1144,3 @@ export const Tab3Capacity: React.FC<Props> = ({
     </div>
   );
 };
-

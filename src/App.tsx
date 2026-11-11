@@ -1,16 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  TrendingUp,
-  Clock,
-  Users,
   Sun,
   Moon,
   Download,
   Printer,
   CheckCircle2,
   Globe,
-  Sparkles,
 } from 'lucide-react';
+import {
+  BrandWfmEmblem,
+  ForecastStudioIcon,
+  ErlangQueueIcon,
+  CapacityWaterfallIcon,
+} from './components/ProMaxIcons.tsx';
 import type {
   CapacityConfig,
   DayKey,
@@ -25,12 +27,11 @@ import type {
 import {
   buildIntervalInputsForGranularity,
   buildSampleDailyHistory,
-  buildSampleMonthlyHistory,
   DEFAULT_30M_CURVES,
   DEFAULT_DOW_SHARES,
 } from './engine/samples.ts';
 import { runForecastingStudio } from './engine/forecasting.ts';
-import { runErlangPlanner } from './engine/erlang.ts';
+import { runErlangPlanner, solveRequiredAgents } from './engine/erlang.ts';
 import { buildWhatIfMatrix, calculateCapacityWaterfall } from './engine/capacity.ts';
 import { exportFullSuiteWorkbook } from './engine/exporter.ts';
 import { Tab1Forecasting } from './components/Tab1Forecasting.tsx';
@@ -53,8 +54,10 @@ export const App: React.FC = () => {
     const root = document.documentElement;
     if (theme === 'dark') {
       root.classList.add('dark');
+      root.classList.remove('light');
     } else {
       root.classList.remove('dark');
+      root.classList.add('light');
     }
     localStorage.setItem('wfm_theme', theme);
   }, [theme]);
@@ -110,13 +113,13 @@ export const App: React.FC = () => {
   const [operatingDaysPerMonth, setOperatingDaysPerMonth] = useState<number>(30);
 
   // Shared Monthly Volume Breakdown Context (for Cap Plan Sheet Breakdown)
-  const [monthlyVolume, setMonthlyVolume] = useState<number>(62245);
+  const [monthlyVolume, setMonthlyVolume] = useState<number>(81563);
   const [monthDays, setMonthDays] = useState<number>(30);
   const [hoops, setHoops] = useState<number>(24);
 
   // Tab 2 State (Pure ErlangXL97 mode by default: enforceMaxAsa=false, enforceOccupancyCap=false)
   const [erlangConfig, setErlangConfig] = useState<ErlangConfig>({
-    dailyVolume: 2075,
+    dailyVolume: 2719,
     granularityMin: 30,
     operating24x7: true,
     startHour: 8,
@@ -145,11 +148,35 @@ export const App: React.FC = () => {
     [intervals, erlangConfig]
   );
 
-  // Tab 3 State
+  // Live Monthly Cap Plan Erlang C calculation (Monthly -> Daily -> Hourly -> Erlang Required/Hr -> Required/Day)
+  const monthlyCapPlanHours = useMemo(() => {
+    const safeDays = Math.max(1, monthDays);
+    const safeHoops = Math.max(1, Math.min(24, hoops));
+    const dailyOff = monthlyVolume / safeDays;
+    const hourlyVol = dailyOff / safeHoops;
+    const solved = solveRequiredAgents(hourlyVol, erlangConfig.globalAhtSec, 3600, {
+      ...erlangConfig,
+      enforceMaxAsa: false,
+      enforceOccupancyCap: false,
+    });
+    const reqPerHour =
+      erlangConfig.agentMode === 'fractional' ? solved.fractionalSeats : solved.integerSeats;
+    return {
+      prodHoursPerDay: Number((reqPerHour * safeHoops).toFixed(2)),
+      pureTalkHoursPerDay: Number(((dailyOff * erlangConfig.globalAhtSec) / 3600).toFixed(2)),
+    };
+  }, [
+    monthlyVolume,
+    monthDays,
+    hoops,
+    erlangConfig,
+  ]);
+
+  // Tab 3 State (Defaulting to 3% In-Office & 22% Out-of-Office Shrinkage matching Cap Plan spreadsheet)
   const [capacityConfig, setCapacityConfig] = useState<CapacityConfig>({
     route: 'erlang_c',
-    erlangProductiveHoursPerDay: 240,
-    pureTalkHoursPerDay: 172.9,
+    erlangProductiveHoursPerDay: 312,
+    pureTalkHoursPerDay: 226.56,
     flatTargetOccupancyPct: 85,
     useShiftMinusBreak: true,
     grossShiftHours: 9,
@@ -165,22 +192,22 @@ export const App: React.FC = () => {
       paidBreaksPct: 0,
     },
     outOfOfficeBreakdown: {
-      annualLeavePct: 10,
-      sickLeavePct: 4,
+      annualLeavePct: 11,
+      sickLeavePct: 5,
       publicHolidaysPct: 3,
       unplannedAbsencePct: 3,
     },
     attritionRampBufferPct: 0,
   });
 
-  // Automatically sync Tab 2 productive & pure talk hours into Tab 3 whenever Tab 2 recalculates
+  // Automatically sync Monthly Cap Plan productive & pure talk hours into Tab 3 whenever Monthly Volume / Erlang config changes
   useEffect(() => {
     setCapacityConfig((prev) => ({
       ...prev,
-      erlangProductiveHoursPerDay: erlangSummary.totalProductiveHours,
-      pureTalkHoursPerDay: erlangSummary.totalPureTalkHours,
+      erlangProductiveHoursPerDay: monthlyCapPlanHours.prodHoursPerDay,
+      pureTalkHoursPerDay: monthlyCapPlanHours.pureTalkHoursPerDay,
     }));
-  }, [erlangSummary.totalProductiveHours, erlangSummary.totalPureTalkHours]);
+  }, [monthlyCapPlanHours.prodHoursPerDay, monthlyCapPlanHours.pureTalkHoursPerDay]);
 
   const capacityResult = useMemo(
     () => calculateCapacityWaterfall(capacityConfig),
@@ -266,6 +293,7 @@ export const App: React.FC = () => {
       selectedDay: dk,
       selectedDateIso: iso,
     }));
+    setMonthlyVolume(vol * monthDays);
     setIntervals(buildIntervalInputsForGranularity(curve, erlangConfig.granularityMin));
     showNotice(`Loaded exact date ${iso} (${vol.toLocaleString()} calls) & arrival pattern.`);
   };
@@ -320,9 +348,9 @@ export const App: React.FC = () => {
       dailyVolume: dailyVol,
       selectedDateIso: null,
     }));
-    setActiveTab('tab2');
+    setActiveTab('tab3');
     showNotice(
-      `Loaded Monthly Forecast (${cleanMonthly.toLocaleString()} calls ÷ ${safeDays}d = ${dailyVol.toLocaleString()}/day) into Tab 2 & Tab 3.`
+      `Loaded Monthly Forecast (${cleanMonthly.toLocaleString()} calls ÷ ${safeDays}d = ${dailyVol.toLocaleString()}/day) into Capacity Plan.`
     );
   };
 
@@ -351,52 +379,7 @@ export const App: React.FC = () => {
     }));
     setActiveTab('tab3');
     showNotice(
-      `Synced ${erlangSummary.totalProductiveHours.toFixed(2)} Required Productive Hours to Tab 3.`
-    );
-  };
-
-  const handleLoadCnxBenchmark = () => {
-    setMonthlyVolume(62245);
-    setMonthDays(30);
-    setHoops(24);
-    setErlangConfig((c) => ({
-      ...c,
-      dailyVolume: 2075,
-      globalAhtSec: 300,
-      slTargetPct: 80,
-      slThresholdSec: 30,
-      enforceMaxAsa: false,
-      enforceOccupancyCap: false,
-      agentMode: 'integer',
-    }));
-    setCapacityConfig({
-      route: 'erlang_c',
-      erlangProductiveHoursPerDay: 240,
-      pureTalkHoursPerDay: 172.9,
-      flatTargetOccupancyPct: 85,
-      useShiftMinusBreak: true,
-      grossShiftHours: 9,
-      unpaidBreakHours: 1,
-      paidShiftHoursDirect: 8,
-      operatingDaysPerWeek: 7,
-      agentWorkdaysPerWeek: 5,
-      scheduleInefficiencyPct: 10,
-      inOfficeBreakdown: {
-        trainingCoachingPct: 1.5,
-        meetingsHuddlesPct: 1.0,
-        systemDowntimePct: 0.5,
-        paidBreaksPct: 0,
-      },
-      outOfOfficeBreakdown: {
-        annualLeavePct: 10,
-        sickLeavePct: 4,
-        publicHolidaysPct: 3,
-        unplannedAbsencePct: 3,
-      },
-      attritionRampBufferPct: 0,
-    });
-    showNotice(
-      'Loaded 62,245 Monthly Cap Plan Benchmark (2,075/d · 86/hr · 10/hr · 240h/d → 60 Agents Required).'
+      `Synced ${erlangSummary.totalProductiveHours.toFixed(2)} Intraday Required Productive Hours to Tab 3.`
     );
   };
 
@@ -417,13 +400,13 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors">
-      {/* Top Command Bar */}
+    <div className="min-h-screen flex flex-col w-full bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors">
+      {/* Top Command Bar (Full-Width Responsive Layout) */}
       <header className="sticky top-0 z-30 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md no-print">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="icon-badge-glow w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white flex items-center justify-center font-extrabold text-xs shadow-md shadow-sky-600/25">
-              <Sparkles className="w-5 h-5 animate-float" />
+        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 h-16 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5 group">
+            <div className="promax-icon-3d promax-badge-cyan animate-icon-glow w-11 h-11 rounded-2xl flex items-center justify-center">
+              <BrandWfmEmblem size={30} />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -436,7 +419,7 @@ export const App: React.FC = () => {
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                12 Carlberg Forecast Models · Pure ErlangXL97 (Agents &amp; Fractional) · Monthly &amp; Daily Cap Plan
+                12 Carlberg Forecast Models · Pure ErlangXL97 (=Agents &amp; =FractionalAgents) · Monthly &amp; Daily Cap Plan
               </p>
             </div>
           </div>
@@ -453,21 +436,21 @@ export const App: React.FC = () => {
             <div>
               <span className="text-slate-400">Daily:</span>{' '}
               <strong className="tabular-nums text-slate-800 dark:text-slate-200">
-                {erlangConfig.dailyVolume.toLocaleString()}
+                {Math.round(monthlyVolume / Math.max(1, monthDays)).toLocaleString()}
               </strong>
             </div>
             <span className="text-slate-300 dark:text-slate-700">→</span>
             <div>
               <span className="text-slate-400">Prod Hrs:</span>{' '}
               <strong className="tabular-nums text-sky-600 dark:text-sky-400">
-                {capacityConfig.erlangProductiveHoursPerDay.toFixed(1)}h
+                {capacityConfig.erlangProductiveHoursPerDay.toFixed(1)}h/d
               </strong>
             </div>
             <span className="text-slate-300 dark:text-slate-700">→</span>
             <div>
-              <span className="text-slate-400">Required FTE:</span>{' '}
+              <span className="text-slate-400">Agents Required:</span>{' '}
               <strong className="tabular-nums text-emerald-600 dark:text-emerald-400">
-                {Math.round(capacityResult.finalGrossFte)} ({capacityResult.finalGrossFte.toFixed(1)})
+                {Math.round(capacityResult.finalGrossFte)} Agents ({capacityResult.finalGrossFte.toFixed(2)})
               </strong>
             </div>
           </div>
@@ -506,7 +489,7 @@ export const App: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Moon className="w-3.5 h-3.5 text-slate-700" />
+                  <Moon className="w-3.5 h-3.5 text-indigo-600" />
                   <span>Night Mode</span>
                 </>
               )}
@@ -515,18 +498,18 @@ export const App: React.FC = () => {
         </div>
 
         {/* 3-Tab Navigation Bar */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center gap-2 overflow-x-auto border-t border-slate-100 dark:border-slate-800/80">
+        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 flex items-center gap-2 overflow-x-auto border-t border-slate-100 dark:border-slate-800/80">
           <button
             type="button"
             onClick={() => setActiveTab('tab1')}
-            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
+            className={`flex items-center gap-2.5 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
               activeTab === 'tab1'
                 ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            <TrendingUp className="w-4 h-4" />
-            1. Forecasting Studio &amp; Future Horizons
+            <ForecastStudioIcon size={20} />
+            1. Forecasting Studio &amp; Future Horizons (Mon → Sun)
             <span className="rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 px-1.5 py-0.5 text-[10px] font-mono">
               12 Models
             </span>
@@ -535,14 +518,14 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveTab('tab2')}
-            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
+            className={`flex items-center gap-2.5 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
               activeTab === 'tab2'
                 ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            <Clock className="w-4 h-4" />
-            2. Interval &amp; Erlang C/A Planner (Agents / Fractional)
+            <ErlangQueueIcon size={20} />
+            2. Interval &amp; Erlang C/A Planner (=Agents / =FractionalAgents)
             <span className="rounded-md bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono">
               {erlangSummary.totalProductiveHours.toFixed(1)}h
             </span>
@@ -551,16 +534,16 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveTab('tab3')}
-            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
+            className={`flex items-center gap-2.5 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
               activeTab === 'tab3'
                 ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            <Users className="w-4 h-4" />
+            <CapacityWaterfallIcon size={20} />
             3. Monthly Cap Plan &amp; Shrinkage Waterfall
             <span className="rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 text-[10px] font-mono">
-              {Math.round(capacityResult.finalGrossFte)} FTE
+              {Math.round(capacityResult.finalGrossFte)} Agents
             </span>
           </button>
         </div>
@@ -574,8 +557,8 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+      {/* Main Content Area (Full-Width Responsive Container) */}
+      <main className="flex-1 w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 py-6">
         {activeTab === 'tab1' && (
           <Tab1Forecasting
             history={history}
@@ -593,24 +576,8 @@ export const App: React.FC = () => {
             operatingDaysPerMonth={operatingDaysPerMonth}
             setOperatingDaysPerMonth={setOperatingDaysPerMonth}
             onDatasetImported={handleDatasetImported}
-            onLoadSampleDaily={() => {
-              setHistory(buildSampleDailyHistory());
-              setForecastConfig((c) => ({
-                ...c,
-                periodicity: 'daily',
-                seasonLength: 7,
-                horizon: 14,
-              }));
-            }}
-            onLoadSampleMonthly={() => {
-              setHistory(buildSampleMonthlyHistory());
-              setForecastConfig((c) => ({
-                ...c,
-                periodicity: 'monthly',
-                seasonLength: 12,
-                horizon: 6,
-              }));
-            }}
+            onLoadSampleDaily={() => {}}
+            onLoadSampleMonthly={() => {}}
             onPushToErlang={handlePushToErlang}
             onPushMonthlyToSuite={handlePushMonthlyToSuite}
           />
@@ -647,6 +614,8 @@ export const App: React.FC = () => {
           <Tab3Capacity
             config={capacityConfig}
             setConfig={setCapacityConfig}
+            erlangConfig={erlangConfig}
+            setErlangConfig={setErlangConfig}
             result={capacityResult}
             whatIfMatrix={whatIfMatrix}
             shrinkageDeltas={SHRINKAGE_DELTAS}
@@ -659,16 +628,16 @@ export const App: React.FC = () => {
             setHoops={setHoops}
             slTargetPct={erlangConfig.slTargetPct}
             slThresholdSec={erlangConfig.slThresholdSec}
-            onLoadCnxBenchmark={handleLoadCnxBenchmark}
             onExportExcel={handleExportExcel}
           />
         )}
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-4 px-4 sm:px-6 text-center text-xs text-slate-400 no-print">
+      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-4 px-4 sm:px-8 text-center text-xs text-slate-400 no-print">
         WFM &amp; Capacity Suite · wfmforall.com · 100% Client-Side Computation (Zero Data Leaves Your Browser)
       </footer>
     </div>
   );
 };
+export default App;

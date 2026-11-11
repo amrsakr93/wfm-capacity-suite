@@ -20,21 +20,14 @@ export function buildSampleDailyHistory(): HistoricalPoint[] {
     const base = 2050 + week * 28;
     // Deterministic realistic micro-variation (no random drift across runs)
     const wave = Math.sin(i * 0.9) * 38 + Math.cos(i * 1.7) * 24;
-    let volume = Math.round(base * dowFactors[dow] + wave);
-
-    // Inject one flagged holiday / outage anomaly on Day 24 (Thu) so outlier cleaner shows immediate impact
-    const isAnomaly = i === 24;
-    if (isAnomaly) {
-      volume = 640;
-    }
+    const volume = Math.round(base * dowFactors[dow] + wave);
 
     points.push({
       id: `sample-${i}`,
       label: iso,
       date: iso,
       volume,
-      isSmoothed: isAnomaly,
-      smoothedVolume: isAnomaly ? 2360 : undefined,
+      isSmoothed: false,
     });
   }
   return points;

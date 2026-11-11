@@ -308,5 +308,87 @@ describe('SharePoint + Power Automate Auth Core Security', () => {
     assert.equal(r2.body.authenticated, true);
     assert.equal(capturedCalls.length, 2);
   });
+
+  it('reproduces exact 81,563 Monthly Cap Plan spreadsheet (13/hr -> 312h/day -> 79 Agents) and Monday-start Next Week', () => {
+    const monthlyOffered = 81563;
+    const monthDays = 30;
+    const hoops = 24;
+    const dailyOffered = monthlyOffered / monthDays; // 2718.7667
+    const hourlyOffered = dailyOffered / hoops; // 113.2819
+
+    const hourlyErlang = solveRequiredAgents(hourlyOffered, 300, 3600, {
+      slTargetPct: 80,
+      slThresholdSec: 30,
+      enforceMaxAsa: false,
+      maxAsaSec: 9999,
+      enforceOccupancyCap: false,
+      maxOccupancyPct: 85,
+      useErlangA: false,
+      avgPatienceSec: 180,
+      minAgentsFloor: 0,
+      agentMode: 'integer',
+    });
+
+    assert.equal(hourlyErlang.integerSeats, 13);
+    assert.equal(hourlyErlang.requiredSeats, 13);
+    assert.ok(hourlyErlang.fractionalSeats > 12 && hourlyErlang.fractionalSeats < 13);
+    const reqPerDayHours = hourlyErlang.requiredSeats * hoops;
+    assert.equal(reqPerDayHours, 312);
+
+    const cap = calculateCapacityWaterfall({
+      route: 'erlang_c',
+      erlangProductiveHoursPerDay: reqPerDayHours,
+      pureTalkHoursPerDay: (dailyOffered * 300) / 3600,
+      flatTargetOccupancyPct: 85,
+      useShiftMinusBreak: true,
+      grossShiftHours: 9,
+      unpaidBreakHours: 1,
+      paidShiftHoursDirect: 8,
+      operatingDaysPerWeek: 7,
+      agentWorkdaysPerWeek: 5,
+      scheduleInefficiencyPct: 10,
+      inOfficeBreakdown: {
+        trainingCoachingPct: 1.5,
+        meetingsHuddlesPct: 1.0,
+        systemDowntimePct: 0.5,
+        paidBreaksPct: 0,
+      },
+      outOfOfficeBreakdown: {
+        annualLeavePct: 10.0,
+        sickLeavePct: 5.0,
+        publicHolidaysPct: 4.0,
+        unplannedAbsencePct: 3.0,
+      },
+      attritionRampBufferPct: 0,
+    });
+
+    assert.ok(Math.abs(cap.netProductiveHoursPerShiftPerFte - 6.0528) < 1e-4);
+    assert.equal(Math.round(cap.finalGrossFte), 79);
+
+    // Also verify Next Week Forecast starts on Monday (Mon -> Sun) even when history ends on Wednesday
+    const wedEndHistory = buildSampleDailyHistory().slice(0, 52); // ends on Wednesday
+    const studio = runForecastingStudio(wedEndHistory, {
+      periodicity: 'daily',
+      holdoutRatio: 0.2,
+      horizon: 14,
+      smaWindow: 7,
+      wmaWeights: [0.1, 0.2, 0.3, 0.4],
+      seasonLength: 7,
+      autoOptimize: true,
+      manualModel: 'holt_winters_mult',
+      manualAlpha: 0.3,
+      manualGamma: 0.1,
+      manualDelta: 0.3,
+    });
+    const futureHorizon = buildFutureHorizonSummary(
+      wedEndHistory,
+      studio.models[0],
+      'daily'
+    );
+    assert.equal(futureHorizon.nextWeekDays.length, 7);
+    assert.equal(futureHorizon.nextWeekDays[0].dayKey, 'Mon');
+    assert.equal(futureHorizon.nextWeekDays[6].dayKey, 'Sun');
+  });
 });
+
 

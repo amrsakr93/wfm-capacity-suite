@@ -10,8 +10,6 @@ import {
   Sliders,
   ChevronDown,
   ChevronUp,
-  Layers,
-  Sparkles,
 } from 'lucide-react';
 import type {
   DayKey,
@@ -23,6 +21,9 @@ import type {
 } from '../engine/types.ts';
 import { parseFileDataset } from '../engine/parsers.ts';
 import { solveRequiredAgents } from '../engine/erlang.ts';
+import { SmartNumberInput } from './SmartNumberInput.tsx';
+import { InteractiveStaffingChart } from './InteractiveCharts.tsx';
+import { ErlangQueueIcon, ProMaxIconBadge } from './ProMaxIcons.tsx';
 
 interface Tab2Props {
   config: ErlangConfig;
@@ -241,12 +242,12 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
           MONTHLY -> DAILY -> HOURLY VOLUME BREAKDOWN CARD
           ("التقسيمة والتنفيطة للفوليوم زي الشيت")
           ===================================================================== */}
-      <div className="card-elevated rounded-2xl border-2 border-indigo-500/30 bg-gradient-to-r from-indigo-500/10 via-white to-emerald-500/5 dark:from-indigo-950/40 dark:via-slate-900 dark:to-emerald-950/20 p-5 shadow-xs">
+      <div className="bento-card-promax card-elevated rounded-2xl border-2 border-indigo-500/30 bg-gradient-to-r from-indigo-500/10 via-white to-emerald-500/5 dark:from-indigo-950/40 dark:via-slate-900 dark:to-emerald-950/20 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="icon-badge-glow w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-600/25">
-              <Layers className="w-5 h-5 animate-float" />
-            </div>
+            <ProMaxIconBadge tone="violet" size="lg" pulse>
+              <ErlangQueueIcon size={24} />
+            </ProMaxIconBadge>
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
@@ -265,28 +266,6 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setMonthlyVolume(62245);
-                setMonthDays(30);
-                setHoops(24);
-                setConfig((c) => ({
-                  ...c,
-                  dailyVolume: 2075,
-                  globalAhtSec: 300,
-                  slTargetPct: 80,
-                  slThresholdSec: 30,
-                  enforceMaxAsa: false,
-                  enforceOccupancyCap: false,
-                }));
-              }}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 text-xs font-semibold transition cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Load 62,245 Monthly Example
-            </button>
-
-            <button
-              type="button"
               onClick={() =>
                 onApplyFlatMonthlyBreakdown(
                   macroBreakdown.reqPerDayHours,
@@ -295,7 +274,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
               }
               className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-xs transition cursor-pointer"
             >
-              Send {macroBreakdown.reqPerDayHours.toFixed(1)}h/day to Tab 3 (60 FTE)
+              Send {macroBreakdown.reqPerDayHours.toFixed(1)}h/day to Tab 3
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -307,16 +286,16 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             <label className="block text-[10px] uppercase font-bold text-slate-400">
               1. Monthly Offered
             </label>
-            <input
-              type="number"
+            <SmartNumberInput
               min={0}
+              decimals={0}
               value={monthlyVolume}
-              onChange={(e) => {
-                const mv = Math.max(0, Number(e.target.value) || 0);
-                setMonthlyVolume(mv);
+              onChange={(mv) => {
+                const cleanMv = Math.max(0, mv);
+                setMonthlyVolume(cleanMv);
                 setConfig((c) => ({
                   ...c,
-                  dailyVolume: Math.round(mv / Math.max(1, monthDays)),
+                  dailyVolume: Math.round(cleanMv / Math.max(1, monthDays)),
                 }));
               }}
               className="mt-1 w-full rounded-lg border border-indigo-500/40 bg-indigo-500/5 px-2 py-1 text-sm font-extrabold tabular-nums text-indigo-600 dark:text-indigo-300"
@@ -327,13 +306,13 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             <label className="block text-[10px] uppercase font-bold text-slate-400">
               2. Month Days
             </label>
-            <input
-              type="number"
+            <SmartNumberInput
               min={1}
               max={31}
+              decimals={0}
               value={monthDays}
-              onChange={(e) => {
-                const md = Math.max(1, Number(e.target.value) || 30);
+              onChange={(v) => {
+                const md = Math.max(1, Math.min(31, Math.round(v)));
                 setMonthDays(md);
                 setConfig((c) => ({
                   ...c,
@@ -360,12 +339,12 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             <label className="block text-[10px] uppercase font-bold text-slate-400">
               4. HOOPS (Hrs/Day)
             </label>
-            <input
-              type="number"
+            <SmartNumberInput
               min={1}
               max={24}
+              decimals={0}
               value={hoops}
-              onChange={(e) => setHoops(Math.max(1, Math.min(24, Number(e.target.value) || 24)))}
+              onChange={(v) => setHoops(Math.max(1, Math.min(24, v)))}
               className="mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-2 py-1 text-sm font-bold tabular-nums"
             />
           </div>
@@ -485,12 +464,12 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
               Daily Offered Volume
             </label>
-            <input
-              type="number"
+            <SmartNumberInput
               min={0}
+              decimals={0}
               value={config.dailyVolume}
-              onChange={(e) => {
-                const dv = Math.max(0, Number(e.target.value) || 0);
+              onChange={(v) => {
+                const dv = Math.max(0, Math.round(v));
                 setConfig((c) => ({ ...c, dailyVolume: dv }));
                 setMonthlyVolume(dv * monthDays);
               }}
@@ -557,12 +536,12 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
               AHT (Seconds)
             </label>
-            <input
-              type="number"
+            <SmartNumberInput
               min={1}
+              decimals={0}
               value={config.globalAhtSec}
-              onChange={(e) =>
-                setConfig((c) => ({ ...c, globalAhtSec: Math.max(1, Number(e.target.value) || 300) }))
+              onChange={(v) =>
+                setConfig((c) => ({ ...c, globalAhtSec: Math.max(1, v) }))
               }
               className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2 text-xs font-bold tabular-nums"
             />
@@ -573,15 +552,15 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
               <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
                 SLA %
               </label>
-              <input
-                type="number"
+              <SmartNumberInput
                 min={1}
                 max={99.9}
+                decimals={1}
                 value={config.slTargetPct}
-                onChange={(e) =>
+                onChange={(v) =>
                   setConfig((c) => ({
                     ...c,
-                    slTargetPct: Math.min(99.9, Math.max(1, Number(e.target.value) || 80)),
+                    slTargetPct: Math.min(99.9, Math.max(1, v)),
                   }))
                 }
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-2 text-xs font-bold tabular-nums"
@@ -591,14 +570,14 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
               <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
                 Time (sec)
               </label>
-              <input
-                type="number"
+              <SmartNumberInput
                 min={1}
+                decimals={0}
                 value={config.slThresholdSec}
-                onChange={(e) =>
+                onChange={(v) =>
                   setConfig((c) => ({
                     ...c,
-                    slThresholdSec: Math.max(1, Number(e.target.value) || 20),
+                    slThresholdSec: Math.max(1, v),
                   }))
                 }
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-2 text-xs font-bold tabular-nums"
@@ -807,112 +786,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
         </div>
 
         <div>
-          {(() => {
-            const w = 960;
-            const h = 210;
-            const padX = 44;
-            const padY = 20;
-            const rows = summary.rows;
-            const count = Math.max(1, rows.length);
-            const yMaxSeats = Math.max(5, Math.ceil(maxSeats * 1.15));
-            const plotW = w - padX * 2;
-            const plotH = h - padY * 2;
-            const slotW = plotW / count;
-            const ySeat = (v: number) => h - padY - (v / yMaxSeats) * plotH;
-            const yOcc = (pct: number) => h - padY - (Math.min(100, Math.max(0, pct)) / 100) * plotH;
-
-            const occPath = rows
-              .map(
-                (r, idx) =>
-                  `${idx === 0 ? 'M' : 'L'}${(padX + (idx + 0.5) * slotW).toFixed(1)},${yOcc(r.occupancyPct).toFixed(1)}`
-              )
-              .join(' ');
-
-            return (
-              <div>
-                <div className="flex flex-wrap items-center gap-4 text-xs mb-2">
-                  <span className="inline-flex items-center gap-1.5 font-semibold text-sky-500">
-                    <span className="w-3 h-3 rounded-xs bg-sky-500 inline-block" />
-                    {config.agentMode === 'fractional'
-                      ? 'Required Fractional Seats'
-                      : 'Required Integer Seats (N)'}
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 font-semibold text-indigo-500">
-                    <span className="w-3 h-3 rounded-xs bg-indigo-500 inline-block" />
-                    Offered Traffic (Erlangs A)
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 font-semibold text-amber-500">
-                    <span className="w-3 h-0.5 bg-amber-500 inline-block" />
-                    Occupancy %
-                  </span>
-                </div>
-                <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-56 overflow-visible">
-                  {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
-                    const y = padY + frac * plotH;
-                    const seatLbl = Math.round(yMaxSeats * (1 - frac));
-                    const occLbl = Math.round(100 * (1 - frac));
-                    return (
-                      <g key={frac}>
-                        <line
-                          x1={padX}
-                          y1={y}
-                          x2={w - padX}
-                          y2={y}
-                          stroke="currentColor"
-                          className="text-slate-200 dark:text-slate-800"
-                          strokeDasharray="3 3"
-                        />
-                        <text
-                          x={padX - 6}
-                          y={y + 4}
-                          textAnchor="end"
-                          className="fill-slate-400 text-[10px] font-mono"
-                        >
-                          {seatLbl}
-                        </text>
-                        <text
-                          x={w - padX + 6}
-                          y={y + 4}
-                          textAnchor="start"
-                          className="fill-amber-500 text-[10px] font-mono"
-                        >
-                          {occLbl}%
-                        </text>
-                      </g>
-                    );
-                  })}
-                  {rows.map((r, idx) => {
-                    const xCenter = padX + (idx + 0.5) * slotW;
-                    const barW = Math.max(2, slotW * 0.68);
-                    const hSeats = Math.max(0, (r.requiredSeats / yMaxSeats) * plotH);
-                    const hErlangs = Math.max(0, (r.erlangs / yMaxSeats) * plotH);
-                    return (
-                      <g key={r.index}>
-                        <rect
-                          x={xCenter - barW / 2}
-                          y={ySeat(r.requiredSeats)}
-                          width={barW}
-                          height={hSeats}
-                          rx={2}
-                          fill="#0284c7"
-                          opacity={0.85}
-                        />
-                        <rect
-                          x={xCenter - barW * 0.3}
-                          y={ySeat(r.erlangs)}
-                          width={barW * 0.6}
-                          height={hErlangs}
-                          rx={1.5}
-                          fill="#6366f1"
-                        />
-                      </g>
-                    );
-                  })}
-                  <path d={occPath} fill="none" stroke="#f59e0b" strokeWidth={2} />
-                </svg>
-              </div>
-            );
-          })()}
+          <InteractiveStaffingChart rows={summary.rows} agentMode={config.agentMode} />
         </div>
       </div>
 

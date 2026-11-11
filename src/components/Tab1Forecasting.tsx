@@ -4,13 +4,11 @@ import {
   FileSpreadsheet,
   Sparkles,
   Award,
-  Calendar,
   ArrowRight,
   Sliders,
   AlertTriangle,
   CheckCircle2,
   BarChart3,
-  TrendingUp,
   Layers,
   Clock,
   ChevronDown,
@@ -27,6 +25,15 @@ import type {
 } from '../engine/types.ts';
 import { parseFileDataset, parseTextDataset } from '../engine/parsers.ts';
 import { buildFutureHorizonSummary } from '../engine/forecasting.ts';
+import { SmartNumberInput } from './SmartNumberInput.tsx';
+import { InteractiveForecastChart, InteractiveArrivalBarChart } from './InteractiveCharts.tsx';
+import {
+  ForecastStudioIcon,
+  ErlangQueueIcon,
+  CalendarHorizonIcon,
+  WinnerTrophyIcon,
+  ProMaxIconBadge,
+} from './ProMaxIcons.tsx';
 
 interface Tab1Props {
   history: HistoricalPoint[];
@@ -149,8 +156,6 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
   byDateCurves,
   byDateTotals,
   onDatasetImported,
-  onLoadSampleDaily,
-  onLoadSampleMonthly,
   onPushToErlang,
   onPushMonthlyToSuite,
 }) => {
@@ -389,17 +394,17 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
   return (
     <div className="space-y-6 animate-slide-up">
       {/* Guided 3-Step Onboarding Strip */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="card-elevated rounded-xl border border-sky-500/30 bg-gradient-to-br from-sky-500/10 via-white to-white dark:from-sky-950/50 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
-          <div className="icon-badge-glow w-11 h-11 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-sky-600/25">
-            <Upload className="w-5 h-5 animate-float" />
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bento-card-promax card-elevated rounded-2xl border border-sky-500/30 bg-gradient-to-br from-sky-500/10 via-white to-white dark:from-sky-950/50 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
+          <ProMaxIconBadge tone="cyan" size="lg" pulse>
+            <Upload className="w-5 h-5" />
+          </ProMaxIconBadge>
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wider text-sky-600 dark:text-sky-400">
               Step 1 · Auto-Ingest Data
             </div>
             <div className="text-xs font-semibold text-slate-900 dark:text-white mt-0.5">
-              Upload Excel/CSV or Pick a Sample
+              Upload Excel/CSV or Paste Spreadsheet Table
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
               Auto-detects dates, intervals &amp; tests all 12 Carlberg models.
@@ -407,16 +412,16 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           </div>
         </div>
 
-        <div className="card-elevated rounded-xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-white to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
-          <div className="icon-badge-glow w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/25">
-            <TrendingUp className="w-5 h-5 animate-float" />
-          </div>
+        <div className="bento-card-promax card-elevated rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-white to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
+          <ProMaxIconBadge tone="emerald" size="lg" pulse>
+            <ForecastStudioIcon size={24} />
+          </ProMaxIconBadge>
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
               Step 2 · Future Forecast Hub
             </div>
             <div className="text-xs font-semibold text-slate-900 dark:text-white mt-0.5">
-              Next Week · Current Month · Next Month
+              Next Week (Mon → Sun) · Current Month · Next Month
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
               Instant totals, daily splits &amp; 1-click capacity transfer.
@@ -424,10 +429,10 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           </div>
         </div>
 
-        <div className="card-elevated rounded-xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/10 via-white to-white dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
-          <div className="icon-badge-glow w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-600/25">
-            <Clock className="w-5 h-5 animate-float" />
-          </div>
+        <div className="bento-card-promax card-elevated rounded-2xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/10 via-white to-white dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
+          <ProMaxIconBadge tone="violet" size="lg">
+            <ErlangQueueIcon size={24} />
+          </ProMaxIconBadge>
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
               Step 3 · Day &amp; Arrival Inspector
@@ -443,12 +448,12 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
       </div>
 
       {/* Simplified Action & Data Upload Bar (No Cryptic Statistical Jargon!) */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
+      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/25 flex items-center justify-center text-sky-600 dark:text-sky-400 shrink-0">
+            <ProMaxIconBadge tone="cyan" size="md">
               <FileSpreadsheet className="w-5 h-5" />
-            </div>
+            </ProMaxIconBadge>
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-bold text-slate-900 dark:text-white">
@@ -488,22 +493,6 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
               className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 px-3.5 py-2 text-xs font-medium transition cursor-pointer"
             >
               Paste Table
-            </button>
-
-            <button
-              type="button"
-              onClick={onLoadSampleDaily}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800 px-3 py-2 text-xs font-medium transition cursor-pointer"
-            >
-              Sample: 56d Daily
-            </button>
-
-            <button
-              type="button"
-              onClick={onLoadSampleMonthly}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800 px-3 py-2 text-xs font-medium transition cursor-pointer"
-            >
-              Sample: 24m Monthly
             </button>
 
             <button
@@ -617,15 +606,15 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                 <label className="block text-[11px] font-medium text-slate-500 mb-1">
                   Seasonal Cycle (m)
                 </label>
-                <input
-                  type="number"
+                <SmartNumberInput
                   min={2}
                   max={52}
+                  decimals={0}
                   value={config.seasonLength}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      seasonLength: Math.max(2, Number(e.target.value) || 7),
+                      seasonLength: Math.max(2, Math.round(v)),
                     }))
                   }
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs tabular-nums"
@@ -635,15 +624,15 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                 <label className="block text-[11px] font-medium text-slate-500 mb-1">
                   Holdout Split %
                 </label>
-                <input
-                  type="number"
+                <SmartNumberInput
                   min={10}
                   max={40}
+                  decimals={0}
                   value={Math.round(config.holdoutRatio * 100)}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      holdoutRatio: Math.min(0.4, Math.max(0.1, Number(e.target.value) / 100)),
+                      holdoutRatio: Math.min(0.4, Math.max(0.1, v / 100)),
                     }))
                   }
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs tabular-nums"
@@ -653,15 +642,15 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                 <label className="block text-[11px] font-medium text-slate-500 mb-1">
                   SMA Window (N)
                 </label>
-                <input
-                  type="number"
+                <SmartNumberInput
                   min={2}
                   max={30}
+                  decimals={0}
                   value={config.smaWindow}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      smaWindow: Math.max(2, Number(e.target.value) || 7),
+                      smaWindow: Math.max(2, Math.round(v)),
                     }))
                   }
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs tabular-nums"
@@ -671,15 +660,15 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                 <label className="block text-[11px] font-medium text-slate-500 mb-1">
                   Chart Horizon
                 </label>
-                <input
-                  type="number"
+                <SmartNumberInput
                   min={1}
                   max={60}
+                  decimals={0}
                   value={config.horizon}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setConfig((c) => ({
                       ...c,
-                      horizon: Math.max(1, Math.min(60, Number(e.target.value) || 7)),
+                      horizon: Math.max(1, Math.min(60, Math.round(v))),
                     }))
                   }
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs tabular-nums"
@@ -695,10 +684,10 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           ===================================================================== */}
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-500">
+          <div className="flex items-center gap-3">
+            <ProMaxIconBadge tone="emerald" size="md" pulse>
               <Zap className="w-4 h-4" />
-            </div>
+            </ProMaxIconBadge>
             <div>
               <h2 className="text-base font-bold text-slate-900 dark:text-white">
                 Future Forecast Command Center (Next Week · Current Month · Next Month)
@@ -711,19 +700,19 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
             </div>
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 px-3 py-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
-            <Award className="w-3.5 h-3.5" />
+            <WinnerTrophyIcon size={16} />
             Best Model: {winnerMeta.nameEn}
           </span>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Card 1: Next Week Forecast (7 Days) */}
-          <div className="card-elevated rounded-2xl border-2 border-sky-500/35 bg-gradient-to-b from-sky-500/10 via-white to-white dark:from-sky-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
+          <div className="bento-card-promax card-elevated rounded-2xl border-2 border-sky-500/35 bg-gradient-to-b from-sky-500/10 via-white to-white dark:from-sky-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/15 px-2.5 py-1 text-xs font-bold text-sky-600 dark:text-sky-400">
-                  <Calendar className="w-3.5 h-3.5" />
-                  Next Week Forecast (7 Days)
+                  <CalendarHorizonIcon tone="cyan" size={16} />
+                  Next Week Forecast (Mon → Sun)
                 </span>
                 <span className="text-[11px] font-mono text-slate-400">
                   {futureSummary.nextWeekDays[0]?.dateIso.slice(5)} →{' '}
@@ -1118,49 +1107,10 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           </div>
 
           <div className="lg:col-span-3">
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/60 p-3">
-              <div className="flex items-center justify-between text-[11px] text-slate-500 mb-2">
-                <span className="font-semibold text-slate-700 dark:text-slate-300">
-                  Intraday Arrival Pattern (%) Curve ({inspectedIntervalData.length} intervals)
-                </span>
-                <span className="font-mono text-sky-600 dark:text-sky-400">
-                  Peak @ {peakInspectedSlot.time} ({peakInspectedSlot.arrivalPct}% ·{' '}
-                  {peakInspectedSlot.calls.toLocaleString()} calls)
-                </span>
-              </div>
-              <div className="h-44 flex items-end gap-0.5 pt-2">
-                {(() => {
-                  const maxPct = Math.max(1, ...inspectedIntervalData.map((d) => d.arrivalPct));
-                  return inspectedIntervalData.map((slot) => {
-                    const hPct = Math.max(4, (slot.arrivalPct / maxPct) * 100);
-                    const isPeak = slot.time === peakInspectedSlot.time;
-                    return (
-                      <div
-                        key={slot.time}
-                        title={`${slot.time} — ${slot.arrivalPct}% (${slot.calls.toLocaleString()} calls)`}
-                        className="flex-1 h-full flex flex-col justify-end items-center group"
-                      >
-                        <div
-                          style={{ height: `${hPct}%` }}
-                          className={`w-full rounded-t transition-all ${
-                            isPeak
-                              ? 'bg-emerald-500 shadow-xs shadow-emerald-500/50'
-                              : 'bg-sky-500/80 group-hover:bg-sky-400'
-                          }`}
-                        />
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-              <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1.5">
-                <span>00:00</span>
-                <span>06:00</span>
-                <span>12:00</span>
-                <span>18:00</span>
-                <span>23:30</span>
-              </div>
-            </div>
+            <InteractiveArrivalBarChart
+              intervals={inspectedIntervalData}
+              peakSlot={peakInspectedSlot}
+            />
           </div>
         </div>
       </div>
@@ -1184,111 +1134,9 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           </div>
         </div>
 
-        {/* Trajectory SVG Chart */}
+        {/* Interactive Trajectory SVG Chart */}
         <div className="p-5 border-b border-slate-100 dark:border-slate-800/80">
-          {(() => {
-            const w = 960;
-            const h = 220;
-            const padX = 44;
-            const padY = 20;
-            const allVals = chartData.flatMap((d) =>
-              [d.actual, d.trainFit, d.holdoutPred, d.futurePred].filter(
-                (v): v is number => v !== undefined
-              )
-            );
-            const maxV = Math.max(100, ...allVals) * 1.08;
-            const minV = Math.max(0, Math.min(...allVals) * 0.88);
-            const spanV = Math.max(1, maxV - minV);
-            const totalPts = Math.max(2, chartData.length);
-            const xOf = (idx: number) => padX + (idx / (totalPts - 1)) * (w - padX * 2);
-            const yOf = (val: number) => h - padY - ((val - minV) / spanV) * (h - padY * 2);
-
-            const makePath = (
-              getter: (d: (typeof chartData)[number]) => number | undefined
-            ): string => {
-              const segs: string[] = [];
-              chartData.forEach((d, idx) => {
-                const v = getter(d);
-                if (v !== undefined) {
-                  segs.push(`${segs.length === 0 ? 'M' : 'L'}${xOf(idx).toFixed(1)},${yOf(v).toFixed(1)}`);
-                }
-              });
-              return segs.join(' ');
-            };
-
-            return (
-              <div>
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-2">
-                  <div className="flex flex-wrap items-center gap-4">
-                    <span className="inline-flex items-center gap-1.5 font-medium text-sky-500">
-                      <span className="w-3 h-0.5 bg-sky-500 inline-block" /> Actual History
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 font-medium text-slate-400">
-                      <span className="w-3 h-0.5 bg-slate-400 inline-block" /> Train Fit (80%)
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 font-medium text-amber-500">
-                      <span className="w-3 h-0.5 bg-amber-500 inline-block" /> Holdout Backtest (20%)
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-500">
-                      <span className="w-3 h-0.5 bg-emerald-500 inline-block" /> Future Forecast
-                    </span>
-                  </div>
-                </div>
-                <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-56 overflow-visible">
-                  {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
-                    const y = padY + frac * (h - padY * 2);
-                    const val = Math.round(maxV - frac * spanV);
-                    return (
-                      <g key={frac}>
-                        <line
-                          x1={padX}
-                          y1={y}
-                          x2={w - padX}
-                          y2={y}
-                          stroke="currentColor"
-                          className="text-slate-200 dark:text-slate-800"
-                          strokeDasharray="3 3"
-                        />
-                        <text
-                          x={padX - 6}
-                          y={y + 4}
-                          textAnchor="end"
-                          className="fill-slate-400 text-[10px] font-mono"
-                        >
-                          {val.toLocaleString()}
-                        </text>
-                      </g>
-                    );
-                  })}
-                  <path
-                    d={makePath((d) => d.actual)}
-                    fill="none"
-                    stroke="#0ea5e9"
-                    strokeWidth={2.2}
-                  />
-                  <path
-                    d={makePath((d) => d.trainFit)}
-                    fill="none"
-                    stroke="#94a3b8"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 4"
-                  />
-                  <path
-                    d={makePath((d) => d.holdoutPred)}
-                    fill="none"
-                    stroke="#f59e0b"
-                    strokeWidth={2.6}
-                  />
-                  <path
-                    d={makePath((d) => d.futurePred)}
-                    fill="none"
-                    stroke="#10b981"
-                    strokeWidth={2.8}
-                  />
-                </svg>
-              </div>
-            );
-          })()}
+          <InteractiveForecastChart data={chartData} />
         </div>
 
         {/* 12-Model Table */}

@@ -279,31 +279,52 @@ function runHoltWinters(
     return { fitted, forecast, sse, fallbackUsed: true };
   }
 
-  // Standard 2-cycle Holt-Winters initialization
-  const firstCycleMean = series.slice(0, seasonLen).reduce((a, b) => a + b, 0) / seasonLen;
-  let trend = 0;
-  for (let i = 0; i < seasonLen; i++) {
-    trend += (series[seasonLen + i] - series[i]) / seasonLen;
+  // Multi-cycle textbook Holt-Winters initialization (Carlberg Ch. 8 / Excel manual parity):
+  // Compute average seasonal indices across all complete seasonal cycles in the series
+  const numCycles = Math.max(1, Math.floor(n / seasonLen));
+  const cycleMeans: number[] = [];
+  for (let c = 0; c < numCycles; c++) {
+    const slice = series.slice(c * seasonLen, (c + 1) * seasonLen);
+    cycleMeans.push(slice.reduce((a, b) => a + b, 0) / seasonLen);
   }
-  trend /= seasonLen;
 
+  const rawSeason = new Array<number>(seasonLen).fill(0);
+  for (let s = 0; s < seasonLen; s++) {
+    let acc = 0;
+    for (let c = 0; c < numCycles; c++) {
+      const val = series[c * seasonLen + s];
+      const cm = cycleMeans[c];
+      acc += mode === 'additive' ? val - cm : cm > 1e-6 ? val / cm : 1;
+    }
+    rawSeason[s] = acc / numCycles;
+  }
+
+  // Normalize initial seasonal indices so additive sums to 0 and multiplicative sums to seasonLen
   const seasonal = new Array<number>(n + horizon);
-  for (let i = 0; i < seasonLen; i++) {
-    seasonal[i] =
-      mode === 'additive'
-        ? series[i] - firstCycleMean
-        : firstCycleMean > 1e-6
-          ? Math.max(0.05, series[i] / firstCycleMean)
-          : 1;
+  if (mode === 'additive') {
+    const avgS = rawSeason.reduce((a, b) => a + b, 0) / seasonLen;
+    for (let s = 0; s < seasonLen; s++) seasonal[s] = rawSeason[s] - avgS;
+  } else {
+    const sumS = rawSeason.reduce((a, b) => a + b, 0);
+    const scale = sumS > 1e-6 ? seasonLen / sumS : 1;
+    for (let s = 0; s < seasonLen; s++) seasonal[s] = Math.max(0.05, rawSeason[s] * scale);
   }
 
-  let level = firstCycleMean;
+  // Fit OLS on deseasonalized first 2 cycles for clean initial Level & Trend
+  const initLen = Math.min(n, seasonLen * 2);
+  const deseasonInit: number[] = [];
+  for (let i = 0; i < initLen; i++) {
+    const s = seasonal[i % seasonLen];
+    deseasonInit.push(mode === 'additive' ? series[i] - s : s > 1e-6 ? series[i] / s : series[i]);
+  }
+  const initOls = fitOLS(deseasonInit);
+  let level = initOls.intercept + initOls.slope * seasonLen;
+  let trend = initOls.slope;
+
   const fitted = new Array<number>(n);
   for (let i = 0; i < seasonLen; i++) {
-    fitted[i] = Math.max(
-      0,
-      mode === 'additive' ? firstCycleMean + trend * (i - seasonLen / 2) + seasonal[i] : firstCycleMean * seasonal[i]
-    );
+    const base = initOls.intercept + initOls.slope * (i + 1);
+    fitted[i] = Math.max(0, mode === 'additive' ? base + seasonal[i] : base * seasonal[i]);
   }
 
   let sse = 0;
@@ -686,45 +707,69 @@ function runBoxJenkinsAR(
   }
   const acf1 = var0 > 1e-9 ? Math.max(-0.98, Math.min(0.98, cov1 / var0)) : 0;
 
-  // If n > seasonLen + 2, calibrate combined AR(1) + Seasonal AR(m) weights
-  let phi1 = Math.max(0, Math.min(0.95, acf1));
-  let phiM = 0;
-  if (n >= seasonLen + 3) {
-    let bestSse = Infinity;
-    for (let wM = 0; wM <= 0.95; wM += 0.1) {
-      for (let w1 = 0; w1 <= 1 - wM + 1e-6; w1 += 0.1) {
-        let sse = 0;
-        for (let t = seasonLen; t < n; t++) {
-          const pred =
-            w1 * series[t - 1] + wM * series[t - seasonLen] + (1 - w1 - wM) * mean;
-          sse += (series[t] - pred) ** 2;
-        }
-        if (sse < bestSse) {
-          bestSse = sse;
-          phi1 = Number(w1.toFixed(2));
-          phiM = Number(wM.toFixed(2));
-        }
+  // If n >= seasonLen + 2, use Box-Jenkins Seasonal Differencing AR(1)_m:
+  // (Y_t - Y_{t-m}) = c + phi1 * (Y_{t-1} - Y_{t-1-m})
+  if (n >= seasonLen + 2) {
+    const sDiffs: number[] = [];
+    for (let t = seasonLen; t < n; t++) {
+      sDiffs.push(series[t] - series[t - seasonLen]);
+    }
+    const meanDiff = sDiffs.reduce((a, b) => a + b, 0) / Math.max(1, sDiffs.length);
+    let num = 0;
+    let den = 0;
+    for (let i = 1; i < sDiffs.length; i++) {
+      num += (sDiffs[i] - meanDiff) * (sDiffs[i - 1] - meanDiff);
+      den += (sDiffs[i - 1] - meanDiff) ** 2;
+    }
+    const phi1 = den > 1e-9 ? Math.max(-0.85, Math.min(0.92, num / den)) : 0.35;
+    const fitted = new Array<number>(n);
+    for (let t = 0; t < n; t++) {
+      if (t < seasonLen) {
+        fitted[t] = series[t];
+      } else if (t === seasonLen) {
+        fitted[t] = Math.max(0, series[t - seasonLen] + meanDiff);
+      } else {
+        const prevDiff = series[t - 1] - series[t - 1 - seasonLen];
+        fitted[t] = Math.max(
+          0,
+          series[t - seasonLen] + meanDiff + phi1 * (prevDiff - meanDiff)
+        );
       }
     }
+
+    const history = [...series];
+    const forecast: number[] = [];
+    for (let h = 0; h < horizon; h++) {
+      const cur = history.length;
+      const lagM = history[cur - seasonLen];
+      const prevDiff = history[cur - 1] - history[cur - 1 - seasonLen];
+      const pred = Math.max(0, lagM + meanDiff + phi1 * (prevDiff - meanDiff));
+      forecast.push(pred);
+      history.push(pred);
+    }
+
+    return {
+      fitted,
+      forecast,
+      phi1: Number(phi1.toFixed(2)),
+      phiM: 1,
+      acf1: Number(acf1.toFixed(3)),
+    };
   }
 
-  const wMean = Math.max(0, 1 - phi1 - phiM);
+  const phi1 = Math.max(0, Math.min(0.95, acf1));
+  const phiM = 0;
+  const wMean = Math.max(0, 1 - phi1);
   const fitted = new Array<number>(n);
   for (let t = 0; t < n; t++) {
-    if (t === 0) fitted[t] = series[0];
-    else if (t < seasonLen) fitted[t] = Math.max(0, phi1 * series[t - 1] + (1 - phi1) * mean);
-    else {
-      fitted[t] = Math.max(0, phi1 * series[t - 1] + phiM * series[t - seasonLen] + wMean * mean);
-    }
+    fitted[t] = t === 0 ? series[0] : Math.max(0, phi1 * series[t - 1] + wMean * mean);
   }
 
   const history = [...series];
   const forecast: number[] = [];
   for (let h = 0; h < horizon; h++) {
-    const curLen = history.length;
-    const lag1 = history[curLen - 1] ?? mean;
-    const lagM = curLen >= seasonLen ? history[curLen - seasonLen] : lag1;
-    const pred = Math.max(0, phi1 * lag1 + phiM * lagM + wMean * mean);
+    const lag1 = history[history.length - 1] ?? mean;
+    const pred = Math.max(0, phi1 * lag1 + wMean * mean);
     forecast.push(pred);
     history.push(pred);
   }
@@ -732,7 +777,7 @@ function runBoxJenkinsAR(
   return {
     fitted,
     forecast,
-    phi1,
+    phi1: Number(phi1.toFixed(2)),
     phiM,
     acf1: Number(acf1.toFixed(3)),
   };
@@ -1137,7 +1182,14 @@ export function buildFutureHorizonSummary(
     }
   }
 
-  const nextWeekDays = allFutureDays.slice(0, 7);
+  // Ensure Next Week Forecast (7 Days) ALWAYS starts on Monday (Mon -> Sun)
+  const firstMonIdx = allFutureDays.findIndex((d) => d.dayKey === 'Mon');
+  const nextWeekDays =
+    firstMonIdx >= 0 && firstMonIdx + 7 <= allFutureDays.length
+      ? allFutureDays.slice(firstMonIdx, firstMonIdx + 7)
+      : [...allFutureDays.slice(0, 7)].sort(
+          (a, b) => ORDERED_DAYS.indexOf(a.dayKey) - ORDERED_DAYS.indexOf(b.dayKey)
+        );
   const currentMonthDays = allFutureDays.slice(0, 30);
   const nextMonthDays = allFutureDays.slice(30, 60);
 
