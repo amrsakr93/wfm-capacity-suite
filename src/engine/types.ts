@@ -3,11 +3,16 @@ export type Periodicity = 'daily' | 'weekly' | 'monthly';
 export type ForecastModelId =
   | 'sma'
   | 'wma'
+  | 'cma_decomposition'
   | 'ses'
+  | 'ses_differenced'
   | 'holt'
+  | 'holt_damped'
   | 'holt_winters_add'
   | 'holt_winters_mult'
-  | 'linear_regression';
+  | 'linear_regression'
+  | 'multiple_regression'
+  | 'box_jenkins_ar';
 
 export interface HistoricalPoint {
   id: string;
@@ -48,6 +53,7 @@ export interface ForecastModelResult {
   fittedTrain: number[];
   holdoutPreds: number[];
   futureForecast: number[];
+  extendedFutureForecast: number[]; // always >= 60 future steps for Next Week / Current Month / Next Month cards
   holdoutMetrics: ForecastMetrics;
   trainMetrics: ForecastMetrics;
   r2?: number;
@@ -55,6 +61,31 @@ export interface ForecastModelResult {
   intercept?: number;
   isBest: boolean;
   note?: string;
+}
+
+export interface ForecastDayItem {
+  stepIndex: number;
+  dateIso: string;
+  label: string;
+  dayKey: DayKey;
+  volume: number;
+}
+
+export interface FutureHorizonSummary {
+  nextWeekTotal: number;
+  nextWeekDailyAvg: number;
+  nextWeekPeakDay: ForecastDayItem;
+  nextWeekDays: ForecastDayItem[];
+  currentMonthTotal: number;
+  currentMonthDailyAvg: number;
+  currentMonthLabel: string;
+  currentMonthDays: ForecastDayItem[];
+  nextMonthTotal: number;
+  nextMonthDailyAvg: number;
+  nextMonthLabel: string;
+  nextMonthGrowthPct: number;
+  nextMonthDays: ForecastDayItem[];
+  allFutureDays: ForecastDayItem[];
 }
 
 export interface ForecastingStudioOutput {
@@ -67,6 +98,7 @@ export interface ForecastingStudioOutput {
 
 export type IntervalGranularityMin = 60 | 30 | 15;
 export type DayKey = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
+export type ErlangAgentMode = 'integer' | 'fractional';
 
 export interface IntervalRowInput {
   index: number;
@@ -86,10 +118,15 @@ export interface ErlangConfig {
   slThresholdSec: number; // e.g. 20
   maxAsaSec: number; // e.g. 30
   maxOccupancyPct: number; // e.g. 85
+  enforceMaxAsa?: boolean; // default false (matches pure ErlangXL97)
+  enforceOccupancyCap?: boolean; // default false (matches pure ErlangXL97)
+  agentMode?: ErlangAgentMode; // 'integer' (Agents) | 'fractional' (FractionalAgents)
+  preserveExactIntervalVolumes?: boolean; // when true, do not round interval volumes (e.g. flat 2075/24 = 86.46)
   minAgentsFloor: number; // e.g. 0 or 1
   useErlangA: boolean;
   avgPatienceSec: number; // e.g. 90
   selectedDay: DayKey;
+  selectedDateIso?: string | null;
 }
 
 export interface IntervalStaffingRow {
@@ -100,13 +137,15 @@ export interface IntervalStaffingRow {
   volume: number;
   ahtSec: number;
   erlangs: number; // A
-  requiredSeats: number; // N
+  requiredSeats: number; // N (integer or fractional depending on agentMode)
+  integerSeats: number; // Integer Agents (ErlangXL97 Agents)
+  fractionalSeats: number; // Fractional Agents (ErlangXL97 FractionalAgents)
   occupancyPct: number; // A / N * 100 (effective in Erlang A)
   asaSec: number;
   slPct: number;
   probWaitPct: number;
   abandonPct: number | null;
-  productiveHours: number; // N * I_min / 60
+  productiveHours: number; // requiredSeats * I_min / 60
   pureTalkHours: number; // A * I_min / 60
 }
 
@@ -115,6 +154,8 @@ export interface ErlangSummary {
   totalVolume: number;
   totalPureTalkHours: number;
   totalProductiveHours: number;
+  totalIntegerProductiveHours: number;
+  totalFractionalProductiveHours: number;
   peakSeats: number;
   peakTimeLabel: string;
   weightedSlPct: number;
@@ -200,6 +241,9 @@ export interface ParsedDataset {
   granularityMinGuess: IntervalGranularityMin;
   dayCurves?: Record<DayKey, number[]>; // percentage arrays (sum = 100) aligned to 30m/60m/15m
   dayOfWeekShares?: Record<DayKey, number>; // % share of weekly volume per day
+  byDateCurves?: Record<string, number[]>; // exact percentage arrival curve for each ISO date YYYY-MM-DD
+  byDateVolumes?: Record<string, number[]>; // exact interval volumes for each ISO date YYYY-MM-DD
+  byDateTotals?: Record<string, number>; // exact daily total volume for each ISO date YYYY-MM-DD
   timeLabels?: string[];
   summaryNote: string;
 }

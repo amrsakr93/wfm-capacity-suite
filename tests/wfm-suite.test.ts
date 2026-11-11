@@ -10,7 +10,7 @@ import {
   generateTimeLabels,
 } from '../src/engine/erlang.ts';
 import { calculateCapacityWaterfall } from '../src/engine/capacity.ts';
-import { runForecastingStudio, fitOLS } from '../src/engine/forecasting.ts';
+import { runForecastingStudio, fitOLS, buildFutureHorizonSummary } from '../src/engine/forecasting.ts';
 import { parseTextDataset } from '../src/engine/parsers.ts';
 import { buildSampleDailyHistory, DEFAULT_30M_CURVES, buildIntervalInputsForGranularity } from '../src/engine/samples.ts';
 import {
@@ -54,12 +54,32 @@ describe('Erlang C & Palm/Erlang A Mathematical Engine', () => {
     assert.ok(a.slPct >= c.slPct, 'Abandonment reduces queue buildup and improves remaining caller SL');
   });
 
-  it('enforces all multi-constraint solver guardrails simultaneously (SL, ASA, Max Occ)', () => {
+  it('matches ErlangXL97 Module1 Agents & FractionalAgents in pure SLA mode and supports optional guardrails', () => {
+    // Pure ErlangXL97 Example sheet test: SLA=85%, ServiceTime=7s, CallsPerHour=100, AHT=180s (A=5.0)
+    // In ErlangXL97 Sheet "Example" Row 8: Agents(85%, 7, 100, 180) = 8 agents (SL(7)=70.2%, SL(8)=85.3%)
+    const ex = solveRequiredAgents(100, 180, 3600, {
+      slTargetPct: 85,
+      slThresholdSec: 7,
+      maxAsaSec: 30,
+      maxOccupancyPct: 85,
+      enforceMaxAsa: false,
+      enforceOccupancyCap: false,
+      agentMode: 'fractional',
+      minAgentsFloor: 0,
+      useErlangA: false,
+      avgPatienceSec: 90,
+    });
+    assert.equal(ex.integerSeats, 8);
+    assert.ok(ex.fractionalSeats > 7.9 && ex.fractionalSeats < 8.0, `Expected fractional ~7.98, got ${ex.fractionalSeats}`);
+
+    // Guardrail enforcement when explicitly enabled
     const solved = solveRequiredAgents(120, 300, 3600, {
       slTargetPct: 80,
       slThresholdSec: 20,
       maxAsaSec: 25,
       maxOccupancyPct: 80,
+      enforceMaxAsa: true,
+      enforceOccupancyCap: true,
       minAgentsFloor: 2,
       useErlangA: false,
       avgPatienceSec: 90,
@@ -70,27 +90,31 @@ describe('Erlang C & Palm/Erlang A Mathematical Engine', () => {
     assert.ok(solved.requiredSeats >= 13); // A = 10 -> Occ <= 80% forces N >= 13
   });
 
-  it('runs 30-min interval schedule conserving normalized daily volume', () => {
+  it('runs 30-min interval schedule conserving exact daily volume (zero rounding drift on 2904)', () => {
     const inputs = buildIntervalInputsForGranularity(DEFAULT_30M_CURVES.Mon, 30);
     const res = runErlangPlanner(inputs, {
-      dailyVolume: 2075,
+      dailyVolume: 2904,
       granularityMin: 30,
       operating24x7: true,
       startHour: 8,
       endHour: 22,
       globalAhtSec: 300,
       slTargetPct: 80,
-      slThresholdSec: 30,
-      maxAsaSec: 35,
+      slThresholdSec: 20,
+      maxAsaSec: 30,
       maxOccupancyPct: 85,
-      minAgentsFloor: 1,
+      enforceMaxAsa: false,
+      enforceOccupancyCap: false,
+      agentMode: 'integer',
+      minAgentsFloor: 0,
       useErlangA: false,
       avgPatienceSec: 90,
       selectedDay: 'Mon',
     });
     assert.equal(res.rows.length, 48);
-    assert.ok(Math.abs(res.totalVolume - 2075) <= 25);
+    assert.equal(res.totalVolume, 2904); // Exact largest-remainder volume conservation!
     assert.ok(res.totalProductiveHours > res.totalPureTalkHours);
+    assert.ok(res.totalFractionalProductiveHours <= res.totalIntegerProductiveHours);
   });
 });
 
@@ -132,7 +156,7 @@ describe('Capacity & Shrinkage FTE Waterfall (No Double-Counting)', () => {
   });
 });
 
-describe('Conrad Carlberg Forecasting Studio Engine', () => {
+describe('Conrad Carlberg Forecasting Studio Engine (All 12 Book Methods)', () => {
   it('computes exact OLS slope, intercept and R2 = 1 on noiseless linear series', () => {
     const series = [110, 120, 130, 140, 150, 160];
     const ols = fitOLS(series);
@@ -141,7 +165,7 @@ describe('Conrad Carlberg Forecasting Studio Engine', () => {
     assert.ok(Math.abs(ols.r2 - 1) < 1e-6);
   });
 
-  it('auto-optimizes all 6 models with chronological 80/20 holdout & picks strong seasonal/trend winner', () => {
+  it('auto-optimizes all 12 Carlberg models with chronological 80/20 holdout & builds Next Week / Current Month / Next Month horizons', () => {
     const sample = buildSampleDailyHistory();
     const out = runForecastingStudio(sample, {
       periodicity: 'daily',
@@ -160,10 +184,19 @@ describe('Conrad Carlberg Forecasting Studio Engine', () => {
     assert.equal(out.cleanedSeries.length, 56);
     assert.equal(out.trainLength, 45);
     assert.equal(out.holdoutLength, 11);
-    assert.equal(out.models.length, 7); // SMA, WMA, SES, Holt, HW-Add, HW-Mult, OLS
+    assert.equal(out.models.length, 12); // All 12 Conrad Carlberg methods!
     const best = out.models.find((m) => m.isBest)!;
     assert.ok(best.holdoutMetrics.wmape < 12, `Expected accurate seasonal holdout <12%, got ${best.holdoutMetrics.wmape}`);
     assert.equal(best.futureForecast.length, 7);
+    assert.equal(best.extendedFutureForecast.length, 60);
+
+    const horizonSummary = buildFutureHorizonSummary(sample, best, 'daily');
+    assert.equal(horizonSummary.nextWeekDays.length, 7);
+    assert.equal(horizonSummary.currentMonthDays.length, 30);
+    assert.equal(horizonSummary.nextMonthDays.length, 30);
+    assert.ok(horizonSummary.nextWeekTotal > 5000);
+    assert.ok(horizonSummary.currentMonthTotal > 20000);
+    assert.ok(horizonSummary.nextMonthTotal > 20000);
   });
 });
 

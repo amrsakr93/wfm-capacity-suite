@@ -1,9 +1,13 @@
 import type {
+  DayKey,
   ForecastConfig,
+  ForecastDayItem,
   ForecastMetrics,
   ForecastModelResult,
   ForecastingStudioOutput,
+  FutureHorizonSummary,
   HistoricalPoint,
+  Periodicity,
 } from './types.ts';
 
 export function computeAccuracyMetrics(actuals: number[], preds: number[]): ForecastMetrics {
@@ -434,7 +438,308 @@ function optimizeHoltWintersParams(
 }
 
 /**
- * Runs all 6 Conrad Carlberg forecasting models with strict chronological 80/20 Holdout backtest
+ * Carlberg Ch. 3 & 7: Classical Ratio-to-Moving-Average Decomposition (CMA + Seasonal Index + Trend)
+ */
+function runCmaDecomposition(
+  series: number[],
+  m: number,
+  horizon: number
+): { fitted: number[]; forecast: number[]; seasonalIndices: number[]; r2: number } {
+  const n = series.length;
+  const seasonLen = Math.max(2, Math.floor(m));
+  if (n < seasonLen) {
+    const ols = fitOLS(series);
+    const forecast: number[] = [];
+    for (let h = 1; h <= horizon; h++) {
+      forecast.push(Math.max(0, ols.intercept + ols.slope * (n + h)));
+    }
+    return { fitted: ols.fitted, forecast, seasonalIndices: new Array(seasonLen).fill(1), r2: ols.r2 };
+  }
+
+  // Step 1: Centered Moving Average (CMA)
+  const cma = new Array<number>(n).fill(0);
+  const half = Math.floor(seasonLen / 2);
+  for (let t = 0; t < n; t++) {
+    let sum = 0;
+    let cnt = 0;
+    for (let k = -half; k <= half; k++) {
+      const idx = t + k;
+      if (idx >= 0 && idx < n) {
+        const weight = seasonLen % 2 === 0 && (k === -half || k === half) ? 0.5 : 1;
+        sum += series[idx] * weight;
+        cnt += weight;
+      }
+    }
+    cma[t] = cnt > 0 ? sum / cnt : series[t];
+  }
+
+  // Step 2: Ratio-to-Moving-Average per seasonal slot
+  const slotSums = new Array<number>(seasonLen).fill(0);
+  const slotCounts = new Array<number>(seasonLen).fill(0);
+  for (let t = 0; t < n; t++) {
+    const ratio = cma[t] > 1e-6 ? series[t] / cma[t] : 1;
+    const s = t % seasonLen;
+    slotSums[s] += ratio;
+    slotCounts[s] += 1;
+  }
+  const rawIndices = slotSums.map((s, idx) => (slotCounts[idx] > 0 ? s / slotCounts[idx] : 1));
+  const idxSum = rawIndices.reduce((a, b) => a + b, 0) || seasonLen;
+  const seasonalIndices = rawIndices.map((v) => Math.max(0.05, (v * seasonLen) / idxSum));
+
+  // Step 3: Deseasonalize & fit OLS trend
+  const deseason = series.map((y, t) => y / Math.max(0.05, seasonalIndices[t % seasonLen]));
+  const ols = fitOLS(deseason);
+
+  const fitted = series.map((_, t) =>
+    Math.max(0, (ols.intercept + ols.slope * (t + 1)) * seasonalIndices[t % seasonLen])
+  );
+  const forecast: number[] = [];
+  for (let h = 1; h <= horizon; h++) {
+    const t = n + h;
+    const s = seasonalIndices[(t - 1) % seasonLen];
+    forecast.push(Math.max(0, (ols.intercept + ols.slope * t) * s));
+  }
+  return { fitted, forecast, seasonalIndices, r2: ols.r2 };
+}
+
+/**
+ * Carlberg Ch. 4: First-Differenced Simple Exponential Smoothing (Delta Y_t = Y_t - Y_{t-1})
+ * Prevents SES lagging behind strong positive or negative trends.
+ */
+function runDifferencedSES(
+  series: number[],
+  alpha: number,
+  horizon: number
+): { fitted: number[]; forecast: number[]; sse: number } {
+  const n = series.length;
+  if (n <= 1) {
+    return {
+      fitted: [...series],
+      forecast: new Array(horizon).fill(series[0] ?? 0),
+      sse: 0,
+    };
+  }
+  const diffs: number[] = [];
+  for (let t = 1; t < n; t++) {
+    diffs.push(series[t] - series[t - 1]);
+  }
+  // Smooth first differences
+  const fDiff = new Array<number>(diffs.length);
+  fDiff[0] = diffs[0];
+  for (let i = 1; i < diffs.length; i++) {
+    fDiff[i] = alpha * diffs[i - 1] + (1 - alpha) * fDiff[i - 1];
+  }
+  const lastDiff =
+    alpha * diffs[diffs.length - 1] + (1 - alpha) * fDiff[fDiff.length - 1];
+
+  const fitted = new Array<number>(n);
+  fitted[0] = series[0];
+  let sse = 0;
+  for (let t = 1; t < n; t++) {
+    fitted[t] = Math.max(0, series[t - 1] + fDiff[t - 1]);
+    sse += (series[t] - fitted[t]) ** 2;
+  }
+  const lastActual = series[n - 1];
+  const forecast: number[] = [];
+  for (let h = 1; h <= horizon; h++) {
+    forecast.push(Math.max(0, lastActual + h * lastDiff));
+  }
+  return { fitted, forecast, sse };
+}
+
+/**
+ * Carlberg Ch. 4 / Damped Trend: Holt's Damped Exponential Smoothing (alpha, gamma, phi)
+ */
+function runDampedHolt(
+  series: number[],
+  alpha: number,
+  gamma: number,
+  phi: number,
+  horizon: number
+): { fitted: number[]; forecast: number[]; sse: number } {
+  if (series.length === 0) return { fitted: [], forecast: [], sse: 0 };
+  const fitted = new Array<number>(series.length);
+  let level = series[0];
+  let trend = series.length > 1 ? series[1] - series[0] : 0;
+  fitted[0] = level;
+  let sse = 0;
+
+  for (let t = 1; t < series.length; t++) {
+    const pred = Math.max(0, level + phi * trend);
+    fitted[t] = pred;
+    sse += (series[t] - pred) ** 2;
+    const prevLevel = level;
+    level = alpha * series[t] + (1 - alpha) * (level + phi * trend);
+    trend = gamma * (level - prevLevel) + (1 - gamma) * phi * trend;
+  }
+
+  const forecast: number[] = [];
+  let phiSum = 0;
+  let phiPow = 1;
+  for (let h = 1; h <= horizon; h++) {
+    phiPow *= phi;
+    phiSum += phiPow;
+    forecast.push(Math.max(0, level + phiSum * trend));
+  }
+  return { fitted, forecast, sse };
+}
+
+/**
+ * Carlberg Ch. 6: Multiple Linear Regression with Linear Trend + Seasonal Dummy Variables (m-1 indicators)
+ */
+function runMultipleRegressionSeasonal(
+  series: number[],
+  m: number,
+  horizon: number
+): { fitted: number[]; forecast: number[]; slope: number; r2: number; adjR2: number } {
+  const n = series.length;
+  const seasonLen = Math.max(2, Math.floor(m));
+  if (n < seasonLen + 2) {
+    const ols = fitOLS(series);
+    const forecast: number[] = [];
+    for (let h = 1; h <= horizon; h++) {
+      forecast.push(Math.max(0, ols.intercept + ols.slope * (n + h)));
+    }
+    return { fitted: ols.fitted, forecast, slope: ols.slope, r2: ols.r2, adjR2: ols.r2 };
+  }
+
+  // Within-group demeaning (exact Frisch-Waugh-Lovell fixed-effects dummy solver)
+  const slotTimes: number[][] = Array.from({ length: seasonLen }, () => []);
+  const slotVals: number[][] = Array.from({ length: seasonLen }, () => []);
+  for (let i = 0; i < n; i++) {
+    const s = i % seasonLen;
+    slotTimes[s].push(i + 1);
+    slotVals[s].push(series[i]);
+  }
+  const meanTBySlot = slotTimes.map((arr) =>
+    arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+  );
+  const meanYBySlot = slotVals.map((arr) =>
+    arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+  );
+
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    const s = i % seasonLen;
+    const dt = i + 1 - meanTBySlot[s];
+    const dy = series[i] - meanYBySlot[s];
+    num += dt * dy;
+    den += dt * dt;
+  }
+  const slope = Math.abs(den) > 1e-12 ? num / den : 0;
+  const interceptsBySlot = meanYBySlot.map((my, s) => my - slope * meanTBySlot[s]);
+
+  const meanY = series.reduce((a, b) => a + b, 0) / n;
+  let ssRes = 0;
+  let ssTot = 0;
+  const fitted = series.map((y, i) => {
+    const s = i % seasonLen;
+    const yhat = Math.max(0, interceptsBySlot[s] + slope * (i + 1));
+    ssRes += (y - yhat) ** 2;
+    ssTot += (y - meanY) ** 2;
+    return yhat;
+  });
+  const r2 = ssTot > 1e-9 ? Math.max(0, Math.min(1, 1 - ssRes / ssTot)) : 1;
+  const k = seasonLen; // 1 slope + (m-1) dummies
+  const adjR2 = n > k + 1 ? Math.max(0, 1 - ((1 - r2) * (n - 1)) / (n - k - 1)) : r2;
+
+  const forecast: number[] = [];
+  for (let h = 1; h <= horizon; h++) {
+    const idx = n + h - 1;
+    const s = idx % seasonLen;
+    forecast.push(Math.max(0, interceptsBySlot[s] + slope * (n + h)));
+  }
+
+  return { fitted, forecast, slope, r2, adjR2 };
+}
+
+/**
+ * Carlberg Ch. 9 & 10: Box-Jenkins Autoregressive Model AR(p) with Lag-1 and Seasonal Lag-m
+ */
+function runBoxJenkinsAR(
+  series: number[],
+  m: number,
+  horizon: number
+): { fitted: number[]; forecast: number[]; phi1: number; phiM: number; acf1: number } {
+  const n = series.length;
+  const seasonLen = Math.max(2, Math.floor(m));
+  if (n < 4) {
+    const mean = n > 0 ? series.reduce((a, b) => a + b, 0) / n : 0;
+    return {
+      fitted: [...series],
+      forecast: new Array(horizon).fill(mean),
+      phi1: 0.5,
+      phiM: 0,
+      acf1: 0,
+    };
+  }
+
+  const mean = series.reduce((a, b) => a + b, 0) / n;
+  // Compute Lag-1 ACF (Carlberg Ch. 9)
+  let cov1 = 0;
+  let var0 = 0;
+  for (let t = 0; t < n; t++) {
+    const d = series[t] - mean;
+    var0 += d * d;
+    if (t >= 1) cov1 += d * (series[t - 1] - mean);
+  }
+  const acf1 = var0 > 1e-9 ? Math.max(-0.98, Math.min(0.98, cov1 / var0)) : 0;
+
+  // If n > seasonLen + 2, calibrate combined AR(1) + Seasonal AR(m) weights
+  let phi1 = Math.max(0, Math.min(0.95, acf1));
+  let phiM = 0;
+  if (n >= seasonLen + 3) {
+    let bestSse = Infinity;
+    for (let wM = 0; wM <= 0.95; wM += 0.1) {
+      for (let w1 = 0; w1 <= 1 - wM + 1e-6; w1 += 0.1) {
+        let sse = 0;
+        for (let t = seasonLen; t < n; t++) {
+          const pred =
+            w1 * series[t - 1] + wM * series[t - seasonLen] + (1 - w1 - wM) * mean;
+          sse += (series[t] - pred) ** 2;
+        }
+        if (sse < bestSse) {
+          bestSse = sse;
+          phi1 = Number(w1.toFixed(2));
+          phiM = Number(wM.toFixed(2));
+        }
+      }
+    }
+  }
+
+  const wMean = Math.max(0, 1 - phi1 - phiM);
+  const fitted = new Array<number>(n);
+  for (let t = 0; t < n; t++) {
+    if (t === 0) fitted[t] = series[0];
+    else if (t < seasonLen) fitted[t] = Math.max(0, phi1 * series[t - 1] + (1 - phi1) * mean);
+    else {
+      fitted[t] = Math.max(0, phi1 * series[t - 1] + phiM * series[t - seasonLen] + wMean * mean);
+    }
+  }
+
+  const history = [...series];
+  const forecast: number[] = [];
+  for (let h = 0; h < horizon; h++) {
+    const curLen = history.length;
+    const lag1 = history[curLen - 1] ?? mean;
+    const lagM = curLen >= seasonLen ? history[curLen - seasonLen] : lag1;
+    const pred = Math.max(0, phi1 * lag1 + phiM * lagM + wMean * mean);
+    forecast.push(pred);
+    history.push(pred);
+  }
+
+  return {
+    fitted,
+    forecast,
+    phi1,
+    phiM,
+    acf1: Number(acf1.toFixed(3)),
+  };
+}
+
+/**
+ * Runs all 12 Conrad Carlberg forecasting models with strict chronological 80/20 Holdout backtest
  * and recalibrates winning parameters across full series for out-of-sample future horizon.
  */
 export function runForecastingStudio(
@@ -444,10 +749,12 @@ export function runForecastingStudio(
   const cleanedSeries = prepareCleanedSeries(points);
   const { train, holdout } = splitChronological(cleanedSeries, config.holdoutRatio);
   const holdLen = holdout.length;
+  const extHorizon = Math.max(60, config.horizon);
+  const m = Math.max(2, config.seasonLength);
 
   const results: ForecastModelResult[] = [];
 
-  // 1. Unweighted Moving Average (SMA)
+  // 1. Unweighted Moving Average (SMA — Carlberg Ch. 3)
   let bestSmaN = config.smaWindow;
   if (config.autoOptimize && train.length >= 4) {
     let bestTrainRmse = Infinity;
@@ -461,67 +768,138 @@ export function runForecastingStudio(
     }
   }
   const smaEval = fitAndForecastSMA(train, bestSmaN, holdLen);
-  const smaFull = fitAndForecastSMA(cleanedSeries, bestSmaN, config.horizon);
+  const smaFull = fitAndForecastSMA(cleanedSeries, bestSmaN, extHorizon);
   results.push({
     modelId: 'sma',
     params: { windowN: bestSmaN },
     fittedTrain: smaEval.fitted,
     holdoutPreds: smaEval.forecast,
-    futureForecast: smaFull.forecast,
+    futureForecast: smaFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: smaFull.forecast,
     holdoutMetrics: computeAccuracyMetrics(holdout, smaEval.forecast),
     trainMetrics: computeAccuracyMetrics(train, smaEval.fitted),
     isBest: false,
   });
 
-  // 2. Weighted Moving Average (WMA)
+  // 2. Weighted Moving Average (WMA — Carlberg Ch. 3)
   const wmaWeights = normalizeWeights(config.wmaWeights.length > 0 ? config.wmaWeights : [0.15, 0.35, 0.5]);
   const wmaEval = fitAndForecastWMA(train, wmaWeights, holdLen);
-  const wmaFull = fitAndForecastWMA(cleanedSeries, wmaWeights, config.horizon);
+  const wmaFull = fitAndForecastWMA(cleanedSeries, wmaWeights, extHorizon);
   results.push({
     modelId: 'wma',
     params: { weights: wmaWeights.map((w) => Number(w.toFixed(3))) },
     fittedTrain: wmaEval.fitted,
     holdoutPreds: wmaEval.forecast,
-    futureForecast: wmaFull.forecast,
+    futureForecast: wmaFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: wmaFull.forecast,
     holdoutMetrics: computeAccuracyMetrics(holdout, wmaEval.forecast),
     trainMetrics: computeAccuracyMetrics(train, wmaEval.fitted),
     isBest: false,
   });
 
-  // 3. Simple Exponential Smoothing (SES)
+  // 3. Classical Ratio-to-Moving-Average Decomposition (CMA — Carlberg Ch. 3 & 7)
+  const cmaEval = runCmaDecomposition(train, m, holdLen);
+  const cmaFull = runCmaDecomposition(cleanedSeries, m, extHorizon);
+  results.push({
+    modelId: 'cma_decomposition',
+    params: { seasonLength: m, r2: Number(cmaFull.r2.toFixed(3)) },
+    fittedTrain: cmaEval.fitted,
+    holdoutPreds: cmaEval.forecast,
+    futureForecast: cmaFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: cmaFull.forecast,
+    holdoutMetrics: computeAccuracyMetrics(holdout, cmaEval.forecast),
+    trainMetrics: computeAccuracyMetrics(train, cmaEval.fitted),
+    r2: cmaFull.r2,
+    isBest: false,
+  });
+
+  // 4. Simple Exponential Smoothing (SES — Carlberg Ch. 4)
   const alphaSes = config.autoOptimize ? optimizeAlphaSES(train) : config.manualAlpha;
   const sesEval = runSES(train, alphaSes, holdLen);
-  const sesFull = runSES(cleanedSeries, alphaSes, config.horizon);
+  const sesFull = runSES(cleanedSeries, alphaSes, extHorizon);
   results.push({
     modelId: 'ses',
     params: { alpha: alphaSes },
     fittedTrain: sesEval.fitted,
     holdoutPreds: sesEval.forecast,
-    futureForecast: sesFull.forecast,
+    futureForecast: sesFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: sesFull.forecast,
     holdoutMetrics: computeAccuracyMetrics(holdout, sesEval.forecast),
     trainMetrics: computeAccuracyMetrics(train, sesEval.fitted),
     isBest: false,
   });
 
-  // 4. Holt Linear Exponential Smoothing
+  // 5. First-Differenced Exponential Smoothing (Delta Y_t — Carlberg Ch. 4)
+  let bestDiffAlpha = config.manualAlpha;
+  if (config.autoOptimize && train.length >= 4) {
+    let bestSse = Infinity;
+    for (let a = 0.05; a <= 0.95; a += 0.05) {
+      const r = runDifferencedSES(train, a, 0);
+      if (r.sse < bestSse) {
+        bestSse = r.sse;
+        bestDiffAlpha = Number(a.toFixed(2));
+      }
+    }
+  }
+  const diffEval = runDifferencedSES(train, bestDiffAlpha, holdLen);
+  const diffFull = runDifferencedSES(cleanedSeries, bestDiffAlpha, extHorizon);
+  results.push({
+    modelId: 'ses_differenced',
+    params: { alphaDiff: bestDiffAlpha },
+    fittedTrain: diffEval.fitted,
+    holdoutPreds: diffEval.forecast,
+    futureForecast: diffFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: diffFull.forecast,
+    holdoutMetrics: computeAccuracyMetrics(holdout, diffEval.forecast),
+    trainMetrics: computeAccuracyMetrics(train, diffEval.fitted),
+    isBest: false,
+  });
+
+  // 6. Holt Linear Exponential Smoothing (Carlberg Ch. 4)
   const holtParams = config.autoOptimize
     ? optimizeHoltParams(train)
     : { alpha: config.manualAlpha, gamma: config.manualGamma };
   const holtEval = runHolt(train, holtParams.alpha, holtParams.gamma, holdLen);
-  const holtFull = runHolt(cleanedSeries, holtParams.alpha, holtParams.gamma, config.horizon);
+  const holtFull = runHolt(cleanedSeries, holtParams.alpha, holtParams.gamma, extHorizon);
   results.push({
     modelId: 'holt',
     params: { alpha: holtParams.alpha, gamma: holtParams.gamma },
     fittedTrain: holtEval.fitted,
     holdoutPreds: holtEval.forecast,
-    futureForecast: holtFull.forecast,
+    futureForecast: holtFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: holtFull.forecast,
     holdoutMetrics: computeAccuracyMetrics(holdout, holtEval.forecast),
     trainMetrics: computeAccuracyMetrics(train, holtEval.fitted),
     isBest: false,
   });
 
-  // 5A. Holt-Winters Additive
-  const m = Math.max(2, config.seasonLength);
+  // 7. Damped-Trend Exponential Smoothing (Carlberg Ch. 4 / Damped phi)
+  let bestPhi = 0.9;
+  if (config.autoOptimize && train.length >= 4) {
+    let bestDampedSse = Infinity;
+    for (const p of [0.82, 0.88, 0.92, 0.96]) {
+      const r = runDampedHolt(train, holtParams.alpha, holtParams.gamma, p, 0);
+      if (r.sse < bestDampedSse) {
+        bestDampedSse = r.sse;
+        bestPhi = p;
+      }
+    }
+  }
+  const dampedEval = runDampedHolt(train, holtParams.alpha, holtParams.gamma, bestPhi, holdLen);
+  const dampedFull = runDampedHolt(cleanedSeries, holtParams.alpha, holtParams.gamma, bestPhi, extHorizon);
+  results.push({
+    modelId: 'holt_damped',
+    params: { alpha: holtParams.alpha, gamma: holtParams.gamma, phi: bestPhi },
+    fittedTrain: dampedEval.fitted,
+    holdoutPreds: dampedEval.forecast,
+    futureForecast: dampedFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: dampedFull.forecast,
+    holdoutMetrics: computeAccuracyMetrics(holdout, dampedEval.forecast),
+    trainMetrics: computeAccuracyMetrics(train, dampedEval.fitted),
+    isBest: false,
+  });
+
+  // 8. Holt-Winters Additive Seasonal (Carlberg Ch. 8)
   const hwAddParams = config.autoOptimize
     ? optimizeHoltWintersParams(train, 'additive', m)
     : { alpha: config.manualAlpha, gamma: config.manualGamma, delta: config.manualDelta };
@@ -541,21 +919,22 @@ export function runForecastingStudio(
     hwAddParams.alpha,
     hwAddParams.gamma,
     hwAddParams.delta,
-    config.horizon
+    extHorizon
   );
   results.push({
     modelId: 'holt_winters_add',
     params: { ...hwAddParams, seasonLength: m },
     fittedTrain: hwAddEval.fitted,
     holdoutPreds: hwAddEval.forecast,
-    futureForecast: hwAddFull.forecast,
+    futureForecast: hwAddFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: hwAddFull.forecast,
     holdoutMetrics: computeAccuracyMetrics(holdout, hwAddEval.forecast),
     trainMetrics: computeAccuracyMetrics(train, hwAddEval.fitted),
     isBest: false,
     note: hwAddEval.fallbackUsed ? 'Seasonal index fallback (< 2 full cycles in train set)' : undefined,
   });
 
-  // 5B. Holt-Winters Multiplicative
+  // 9. Holt-Winters Multiplicative Seasonal (Carlberg Ch. 8)
   const hwMultParams = config.autoOptimize
     ? optimizeHoltWintersParams(train, 'multiplicative', m)
     : { alpha: config.manualAlpha, gamma: config.manualGamma, delta: config.manualDelta };
@@ -575,21 +954,22 @@ export function runForecastingStudio(
     hwMultParams.alpha,
     hwMultParams.gamma,
     hwMultParams.delta,
-    config.horizon
+    extHorizon
   );
   results.push({
     modelId: 'holt_winters_mult',
     params: { ...hwMultParams, seasonLength: m },
     fittedTrain: hwMultEval.fitted,
     holdoutPreds: hwMultEval.forecast,
-    futureForecast: hwMultFull.forecast,
+    futureForecast: hwMultFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: hwMultFull.forecast,
     holdoutMetrics: computeAccuracyMetrics(holdout, hwMultEval.forecast),
     trainMetrics: computeAccuracyMetrics(train, hwMultEval.fitted),
     isBest: false,
     note: hwMultEval.fallbackUsed ? 'Seasonal index fallback (< 2 full cycles in train set)' : undefined,
   });
 
-  // 6. Linear Regression OLS (Time-Series)
+  // 10. Simple Linear Regression OLS (Carlberg Ch. 2 & 5 — TREND / LINEST)
   const olsTrain = fitOLS(train);
   const olsHoldoutPreds: number[] = [];
   for (let h = 1; h <= holdLen; h++) {
@@ -597,7 +977,7 @@ export function runForecastingStudio(
   }
   const olsFull = fitOLS(cleanedSeries);
   const olsFuture: number[] = [];
-  for (let h = 1; h <= config.horizon; h++) {
+  for (let h = 1; h <= extHorizon; h++) {
     olsFuture.push(Math.max(0, olsFull.intercept + olsFull.slope * (cleanedSeries.length + h)));
   }
   results.push({
@@ -608,12 +988,53 @@ export function runForecastingStudio(
     },
     fittedTrain: olsTrain.fitted,
     holdoutPreds: olsHoldoutPreds,
-    futureForecast: olsFuture,
+    futureForecast: olsFuture.slice(0, config.horizon),
+    extendedFutureForecast: olsFuture,
     holdoutMetrics: computeAccuracyMetrics(holdout, olsHoldoutPreds),
     trainMetrics: computeAccuracyMetrics(train, olsTrain.fitted),
     r2: olsFull.r2,
     slope: olsFull.slope,
     intercept: olsFull.intercept,
+    isBest: false,
+  });
+
+  // 11. Multiple Linear Regression with Seasonal Dummy Indicators (Carlberg Ch. 6)
+  const mlrEval = runMultipleRegressionSeasonal(train, m, holdLen);
+  const mlrFull = runMultipleRegressionSeasonal(cleanedSeries, m, extHorizon);
+  results.push({
+    modelId: 'multiple_regression',
+    params: {
+      slope: Number(mlrFull.slope.toFixed(3)),
+      dummies: m - 1,
+      adjR2: Number(mlrFull.adjR2.toFixed(3)),
+    },
+    fittedTrain: mlrEval.fitted,
+    holdoutPreds: mlrEval.forecast,
+    futureForecast: mlrFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: mlrFull.forecast,
+    holdoutMetrics: computeAccuracyMetrics(holdout, mlrEval.forecast),
+    trainMetrics: computeAccuracyMetrics(train, mlrEval.fitted),
+    r2: mlrFull.r2,
+    slope: mlrFull.slope,
+    isBest: false,
+  });
+
+  // 12. Box-Jenkins Autoregressive Model AR(p) / Seasonal ARIMA (Carlberg Ch. 9 & 10)
+  const arEval = runBoxJenkinsAR(train, m, holdLen);
+  const arFull = runBoxJenkinsAR(cleanedSeries, m, extHorizon);
+  results.push({
+    modelId: 'box_jenkins_ar',
+    params: {
+      phi1: arFull.phi1,
+      phiSeasonal: arFull.phiM,
+      lag1ACF: arFull.acf1,
+    },
+    fittedTrain: arEval.fitted,
+    holdoutPreds: arEval.forecast,
+    futureForecast: arFull.forecast.slice(0, config.horizon),
+    extendedFutureForecast: arFull.forecast,
+    holdoutMetrics: computeAccuracyMetrics(holdout, arEval.forecast),
+    trainMetrics: computeAccuracyMetrics(train, arEval.fitted),
     isBest: false,
   });
 
@@ -634,6 +1055,132 @@ export function runForecastingStudio(
     holdoutLength: holdout.length,
     models: results,
     bestModelId: results[bestIdx].modelId,
+  };
+}
+
+const JS_DAY_KEYS: DayKey[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const ORDERED_DAYS: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/**
+ * Builds Next Week (7d), Current Month (Days 1-30), and Next Month (Days 31-60)
+ * Future Forecast Horizon Summary from the active model's extended forecast.
+ */
+export function buildFutureHorizonSummary(
+  points: HistoricalPoint[],
+  activeModel: ForecastModelResult,
+  periodicity: Periodicity,
+  dayOfWeekShares?: Record<DayKey, number>
+): FutureHorizonSummary {
+  const ext = activeModel.extendedFutureForecast.length > 0
+    ? activeModel.extendedFutureForecast
+    : activeModel.futureForecast;
+
+  // Determine anchor date from the last historical point (or today)
+  const lastPt = points[points.length - 1];
+  const baseDateMs =
+    lastPt?.date && !Number.isNaN(Date.parse(`${lastPt.date}T00:00:00Z`))
+      ? Date.parse(`${lastPt.date}T00:00:00Z`)
+      : Date.parse('2026-11-11T00:00:00Z');
+
+  const allFutureDays: ForecastDayItem[] = [];
+
+  if (periodicity === 'daily') {
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(baseDateMs + (i + 1) * 86400000);
+      const iso = d.toISOString().slice(0, 10);
+      const dayKey = JS_DAY_KEYS[d.getUTCDay()];
+      const vol = Math.max(0, Math.round(ext[i] ?? ext[ext.length - 1] ?? 0));
+      allFutureDays.push({
+        stepIndex: i + 1,
+        dateIso: iso,
+        label: `${dayKey} ${iso.slice(5)}`,
+        dayKey,
+        volume: vol,
+      });
+    }
+  } else if (periodicity === 'weekly') {
+    // Disaggregate weekly forecasts into 60 daily values using dayOfWeekShares
+    for (let i = 0; i < 60; i++) {
+      const weekIdx = Math.floor(i / 7);
+      const weekVol = Math.max(0, ext[weekIdx] ?? ext[ext.length - 1] ?? 0);
+      const d = new Date(baseDateMs + (i + 1) * 86400000);
+      const iso = d.toISOString().slice(0, 10);
+      const dayKey = JS_DAY_KEYS[d.getUTCDay()];
+      const share = dayOfWeekShares?.[dayKey] ?? 100 / 7;
+      allFutureDays.push({
+        stepIndex: i + 1,
+        dateIso: iso,
+        label: `${dayKey} ${iso.slice(5)}`,
+        dayKey,
+        volume: Math.round((weekVol * share) / 100),
+      });
+    }
+  } else {
+    // Monthly periodicity: Period 0 = Current/Upcoming Month (30 days), Period 1 = Next Month (30 days)
+    const curMonthVol = Math.max(0, Math.round(ext[0] ?? 0));
+    const nxtMonthVol = Math.max(0, Math.round(ext[1] ?? ext[0] ?? 0));
+    for (let i = 0; i < 60; i++) {
+      const monthTotal = i < 30 ? curMonthVol : nxtMonthVol;
+      const d = new Date(baseDateMs + (i + 1) * 86400000);
+      const iso = d.toISOString().slice(0, 10);
+      const dayKey = JS_DAY_KEYS[d.getUTCDay()];
+      const share = dayOfWeekShares?.[dayKey] ?? 100 / 7;
+      // Weight daily volume by weekday share normalized across 30 days (~4.2857 weeks)
+      const dailyVol = Math.round((monthTotal / 30) * (share / (100 / 7)));
+      allFutureDays.push({
+        stepIndex: i + 1,
+        dateIso: iso,
+        label: `${dayKey} ${iso.slice(5)}`,
+        dayKey: dayKey || ORDERED_DAYS[i % 7],
+        volume: dailyVol,
+      });
+    }
+  }
+
+  const nextWeekDays = allFutureDays.slice(0, 7);
+  const currentMonthDays = allFutureDays.slice(0, 30);
+  const nextMonthDays = allFutureDays.slice(30, 60);
+
+  const nextWeekTotal = nextWeekDays.reduce((s, d) => s + d.volume, 0);
+  const nextWeekDailyAvg = Math.round(nextWeekTotal / 7);
+  const nextWeekPeakDay = nextWeekDays.reduce(
+    (best, d) => (d.volume > best.volume ? d : best),
+    nextWeekDays[0]
+  );
+
+  const currentMonthTotal =
+    periodicity === 'monthly'
+      ? Math.max(0, Math.round(ext[0] ?? 0))
+      : currentMonthDays.reduce((s, d) => s + d.volume, 0);
+  const currentMonthDailyAvg = Math.round(currentMonthTotal / 30);
+
+  const nextMonthTotal =
+    periodicity === 'monthly'
+      ? Math.max(0, Math.round(ext[1] ?? ext[0] ?? 0))
+      : nextMonthDays.reduce((s, d) => s + d.volume, 0);
+  const nextMonthDailyAvg = Math.round(nextMonthTotal / 30);
+
+  const nextMonthGrowthPct =
+    currentMonthTotal > 0 ? ((nextMonthTotal - currentMonthTotal) / currentMonthTotal) * 100 : 0;
+
+  const curStart = currentMonthDays[0]?.dateIso.slice(0, 7) ?? 'Current Month';
+  const nxtStart = nextMonthDays[0]?.dateIso.slice(0, 7) ?? 'Next Month';
+
+  return {
+    nextWeekTotal,
+    nextWeekDailyAvg,
+    nextWeekPeakDay,
+    nextWeekDays,
+    currentMonthTotal,
+    currentMonthDailyAvg,
+    currentMonthLabel: `Days 1–30 (${curStart})`,
+    currentMonthDays,
+    nextMonthTotal,
+    nextMonthDailyAvg,
+    nextMonthLabel: `Days 31–60 (${nxtStart})`,
+    nextMonthGrowthPct,
+    nextMonthDays,
+    allFutureDays,
   };
 }
 

@@ -87,7 +87,7 @@
         "id": "7",
         "title": "Comprehensive Unit Test Suite & QA Verification",
         "description": "Write and execute deterministic Node test suite covering parsers, forecasting, Erlang C/A, capacity waterfall, and auth security.",
-        "status": "in-progress",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "2",
@@ -99,7 +99,7 @@
         "details": "Run via npm test using node --test.",
         "testStrategy": "100% tests pass after all engine edits.",
         "subtasks": [],
-        "updatedAt": "2026-11-11T19:47:58.799Z"
+        "updatedAt": "2026-11-11T20:03:57.426Z"
       },
       {
         "id": "8",
@@ -118,7 +118,7 @@
         "id": "9",
         "title": "3-Tab Interactive UI, Precision SVG Charts & Multi-Sheet Excel/PDF Export",
         "description": "Build Tab 1 Forecasting Studio, Tab 2 Interval & Erlang C/A Planner (+ 48x7 heatmap), Tab 3 Capacity Waterfall + What-If Matrix, and SheetJS multi-sheet .xlsx + printable PDF export.",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "3",
@@ -128,7 +128,8 @@
         ],
         "details": "Direct Granularity Bridge button from Tab 1 -> Tab 2 and Productive Hours live link Tab 2 -> Tab 3.",
         "testStrategy": "Interactive flow tested end-to-end in real browser; exported .xlsx verified.",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-11-11T20:04:08.453Z"
       },
       {
         "id": "10",
@@ -147,9 +148,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-11-11T19:47:58.799Z",
+      "lastModified": "2026-11-11T20:04:08.454Z",
       "taskCount": 10,
-      "completedCount": 6,
+      "completedCount": 8,
       "tags": [
         "master"
       ]

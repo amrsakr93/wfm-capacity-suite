@@ -22,6 +22,14 @@ interface Props {
   whatIfMatrix: WhatIfCell[][];
   shrinkageDeltas: number[];
   baseGlobalAhtSec: number;
+  monthlyVolume: number;
+  setMonthlyVolume: (vol: number) => void;
+  monthDays: number;
+  setMonthDays: (days: number) => void;
+  hoops: number;
+  setHoops: (h: number) => void;
+  slTargetPct: number;
+  slThresholdSec: number;
   onLoadCnxBenchmark: () => void;
   onExportExcel: () => void;
 }
@@ -33,13 +41,203 @@ export const Tab3Capacity: React.FC<Props> = ({
   whatIfMatrix,
   shrinkageDeltas,
   baseGlobalAhtSec,
+  monthlyVolume,
+  setMonthlyVolume,
+  monthDays,
+  setMonthDays,
+  hoops,
+  setHoops,
+  slTargetPct,
+  slThresholdSec,
   onLoadCnxBenchmark,
   onExportExcel,
 }) => {
   const maxWaterfallFte = Math.max(...result.waterfall.map((w) => w.fte), 1);
+  const dailyOfferedFromMonth = monthlyVolume / Math.max(1, monthDays);
+  const hourlyVolFromMonth = dailyOfferedFromMonth / Math.max(1, hoops);
+  const reqPerHourEquiv = result.baseRequiredProductiveHoursPerDay / Math.max(1, hoops);
+  const inOfficeProdHoursPerShift =
+    result.effectivePaidShiftHours * (1 - result.inOfficeShrinkagePct / 100);
+  const reqPerDayAfterInOffice =
+    inOfficeProdHoursPerShift > 0
+      ? result.baseRequiredProductiveHoursPerDay / inOfficeProdHoursPerShift
+      : 0;
+  const reqPerWeekAfterInOffice = reqPerDayAfterInOffice * result.weeklyCoverageMultiplier;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-slide-up">
+      {/* Executive Monthly Cap Plan Step-by-Step Sheet ("التقسيمة والتنفيطة الشهرية") */}
+      <div className="card-elevated rounded-2xl border-2 border-emerald-500/35 bg-gradient-to-r from-emerald-500/10 via-white to-sky-500/5 dark:from-emerald-950/35 dark:via-slate-900 dark:to-sky-950/20 p-5 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 border-b border-slate-200/80 dark:border-slate-800">
+          <div className="flex items-start gap-3">
+            <div className="icon-badge-glow w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/25">
+              <Layers className="w-5 h-5 animate-float" />
+            </div>
+            <div>
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                Executive Monthly Cap Plan Breakdown (Monthly → Daily → Hourly → Final Agents Required)
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Complete step-by-step volume &amp; headcount decomposition matching your standard Capacity Plan spreadsheet.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onLoadCnxBenchmark}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 px-3.5 py-1.5 text-xs font-bold transition cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Load 62,245 Monthly Benchmark (→ 60 Agents)
+            </button>
+            <button
+              type="button"
+              onClick={onExportExcel}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-xs cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export .xlsx
+            </button>
+          </div>
+        </div>
+
+        {/* 16-Cell Structured Cap Plan Grid */}
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs">
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">Monthly Offered</div>
+            <input
+              type="number"
+              value={monthlyVolume}
+              onChange={(e) => setMonthlyVolume(Math.max(0, Number(e.target.value) || 0))}
+              className="mt-1 w-full rounded border border-emerald-500/40 bg-emerald-500/5 px-1.5 py-0.5 text-sm font-extrabold tabular-nums text-emerald-600 dark:text-emerald-300"
+            />
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">Month Days</div>
+            <input
+              type="number"
+              min={1}
+              max={31}
+              value={monthDays}
+              onChange={(e) => setMonthDays(Math.max(1, Number(e.target.value) || 30))}
+              className="mt-1 w-full rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1.5 py-0.5 text-sm font-bold tabular-nums"
+            />
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">Daily Offered</div>
+            <div className="mt-1.5 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+              {Math.round(dailyOfferedFromMonth).toLocaleString()}
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">HOOPS (Hrs)</div>
+            <input
+              type="number"
+              min={1}
+              max={24}
+              value={hoops}
+              onChange={(e) => setHoops(Math.max(1, Math.min(24, Number(e.target.value) || 24)))}
+              className="mt-1 w-full rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-1.5 py-0.5 text-sm font-bold tabular-nums"
+            />
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">Hourly Volume</div>
+            <div className="mt-1.5 text-sm font-extrabold tabular-nums text-sky-600 dark:text-sky-400">
+              {Math.round(hourlyVolFromMonth).toLocaleString()}{' '}
+              <span className="text-[10px] font-normal">({hourlyVolFromMonth.toFixed(1)})</span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">SLA / ASA / AHT</div>
+            <div className="mt-1.5 text-xs font-bold tabular-nums text-slate-800 dark:text-slate-200">
+              {slTargetPct}% / {slThresholdSec}s / {baseGlobalAhtSec}s
+            </div>
+          </div>
+          <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-sky-600 dark:text-sky-300">
+              Required / Hr &amp; Day
+            </div>
+            <div className="mt-1.5 text-xs font-extrabold tabular-nums text-sky-700 dark:text-sky-200">
+              {reqPerHourEquiv.toFixed(1)}/hr · {result.baseRequiredProductiveHoursPerDay.toFixed(0)}h/d
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">
+              Work − Break = Login
+            </div>
+            <div className="mt-1.5 text-xs font-bold tabular-nums text-slate-800 dark:text-slate-200">
+              {config.grossShiftHours}h − {config.unpaidBreakHours}h ={' '}
+              {result.effectivePaidShiftHours.toFixed(1)}h
+            </div>
+          </div>
+        </div>
+
+        {/* Second Row of Cap Plan Breakdown */}
+        <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs">
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">
+              In-Office Shrinkage
+            </div>
+            <div className="mt-1 text-sm font-bold tabular-nums text-amber-600 dark:text-amber-400">
+              {result.inOfficeShrinkagePct.toFixed(1)}%
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">
+              Productive Hrs / Agent
+            </div>
+            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+              {inOfficeProdHoursPerShift.toFixed(2)} hrs
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">
+              Required / Day (Seats)
+            </div>
+            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+              {Math.round(reqPerDayAfterInOffice)}{' '}
+              <span className="text-[10px] font-normal text-slate-400">
+                ({reqPerDayAfterInOffice.toFixed(2)})
+              </span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">
+              Required / Week (×{config.operatingDaysPerWeek}/{config.agentWorkdaysPerWeek})
+            </div>
+            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+              {Math.round(reqPerWeekAfterInOffice)}{' '}
+              <span className="text-[10px] font-normal text-slate-400">
+                ({reqPerWeekAfterInOffice.toFixed(2)})
+              </span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-slate-400">
+              Schedule Inflex (+{config.scheduleInefficiencyPct}%)
+            </div>
+            <div className="mt-1 text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+              {Math.round(result.scheduledSeatsAfterInflex)}{' '}
+              <span className="text-[10px] font-normal text-slate-400">
+                ({result.scheduledSeatsAfterInflex.toFixed(2)})
+              </span>
+            </div>
+          </div>
+          <div className="rounded-xl border-2 border-emerald-500 bg-emerald-500/15 p-2.5">
+            <div className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-300">
+              Agents Required [A] (÷{100 - result.outOfOfficeShrinkagePct}% Out)
+            </div>
+            <div className="mt-1 text-lg font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
+              {Math.round(result.finalGrossFte)} Agents{' '}
+              <span className="text-xs font-semibold">
+                ({result.finalGrossFte.toFixed(1)})
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
       {/* Executive Gross Headcount Banner */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
@@ -715,3 +913,4 @@ export const Tab3Capacity: React.FC<Props> = ({
     </div>
   );
 };
+

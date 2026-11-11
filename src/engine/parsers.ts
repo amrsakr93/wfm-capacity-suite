@@ -249,13 +249,29 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       }
     }
 
+    const normCurves = normalizeCurves(accum, granularity);
+    const byDateCurves: Record<string, number[]> = {};
+    const byDateVolumes: Record<string, number[]> = {};
+    const byDateTotals: Record<string, number> = {};
+    for (const pt of dailySeries) {
+      if (!pt.date) continue;
+      const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
+      const dk = JS_DAY_TO_KEY[jsDay];
+      byDateCurves[pt.date] = [...normCurves[dk]];
+      byDateVolumes[pt.date] = normCurves[dk].map((pct) => Number(((pt.volume * pct) / 100).toFixed(2)));
+      byDateTotals[pt.date] = pt.volume;
+    }
+
     return {
       format: 'heatmap_48x7',
       periodicityGuess: 'daily',
       dailySeries,
       granularityMinGuess: granularity,
-      dayCurves: normalizeCurves(accum, granularity),
+      dayCurves: normCurves,
       dayOfWeekShares,
+      byDateCurves,
+      byDateVolumes,
+      byDateTotals,
       timeLabels: generateTimeLabels(granularity),
       summaryNote: `Detected ${slots}x${dayColMap.size} Intraday Heatmap (${granularity}m). Extracted 7 day curves & synthesized 28-day weekly pattern.`,
     };
@@ -284,8 +300,10 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       number[]
     >;
     const dateTotals = new Map<string, number>();
+    const dateSlotVolumes = new Map<string, number[]>();
     for (const iso of dateColMap.values()) {
       if (!dateTotals.has(iso)) dateTotals.set(iso, 0);
+      if (!dateSlotVolumes.has(iso)) dateSlotVolumes.set(iso, new Array(slots).fill(0));
     }
 
     for (const r of dataRows) {
@@ -295,6 +313,8 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       for (const [colIdx, iso] of dateColMap.entries()) {
         const val = Math.max(0, toNumberOrZero(r[colIdx]));
         dateTotals.set(iso, (dateTotals.get(iso) ?? 0) + val);
+        const slotArr = dateSlotVolumes.get(iso);
+        if (slotArr) slotArr[slot] += val;
         const jsDay = new Date(`${iso}T00:00:00Z`).getUTCDay();
         const dk = JS_DAY_TO_KEY[jsDay];
         accum[dk][slot] += val;
@@ -308,6 +328,20 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       date: iso,
       volume: Math.round(vol),
     }));
+
+    const normCurves = normalizeCurves(accum, granularity);
+    const byDateCurves: Record<string, number[]> = {};
+    const byDateVolumes: Record<string, number[]> = {};
+    const byDateTotals: Record<string, number> = {};
+    for (const [iso, totalVol] of sortedDates) {
+      const vols = dateSlotVolumes.get(iso) ?? new Array(slots).fill(0);
+      const jsDay = new Date(`${iso}T00:00:00Z`).getUTCDay();
+      const dk = JS_DAY_TO_KEY[jsDay];
+      byDateVolumes[iso] = vols.map((v) => Number(v.toFixed(2)));
+      byDateTotals[iso] = Math.round(totalVol);
+      byDateCurves[iso] =
+        totalVol > 0 ? vols.map((v) => (v / totalVol) * 100) : [...normCurves[dk]];
+    }
 
     const daySumByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
     const dayCountByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
@@ -328,10 +362,13 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       periodicityGuess: 'daily',
       dailySeries,
       granularityMinGuess: granularity,
-      dayCurves: normalizeCurves(accum, granularity),
+      dayCurves: normCurves,
       dayOfWeekShares,
+      byDateCurves,
+      byDateVolumes,
+      byDateTotals,
       timeLabels: generateTimeLabels(granularity),
-      summaryNote: `Detected Cross-Tab Pivot (${sortedDates.length} dates × ${granularity}m intervals). Populated Forecasting series & Day-of-Week arrival curves.`,
+      summaryNote: `Detected Cross-Tab Pivot (${sortedDates.length} dates × ${granularity}m intervals). Populated Forecasting series & exact per-date arrival curves.`,
     };
   }
 
@@ -361,24 +398,44 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
         DayKey,
         number[]
       >;
+      const byDateVolumes: Record<string, number[]> = {};
+      const byDateTotals: Record<string, number> = {};
       const dailySeries: HistoricalPoint[] = [...grouped.entries()]
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([iso, entries], i) => {
           const dk = JS_DAY_TO_KEY[new Date(`${iso}T00:00:00Z`).getUTCDay()];
+          const slotArr = new Array(slots).fill(0);
           let sum = 0;
           for (const e of entries) {
             sum += e.vol;
-            accum[dk][Math.min(slots - 1, Math.floor(e.mins / granularity))] += e.vol;
+            const slotIdx = Math.min(slots - 1, Math.floor(e.mins / granularity));
+            accum[dk][slotIdx] += e.vol;
+            slotArr[slotIdx] += e.vol;
           }
+          byDateVolumes[iso] = slotArr.map((v) => Number(v.toFixed(2)));
+          byDateTotals[iso] = Math.round(sum);
           return { id: `pt-${i}`, label: iso, date: iso, volume: Math.round(sum) };
         });
+
+      const normCurves = normalizeCurves(accum, granularity);
+      const byDateCurves: Record<string, number[]> = {};
+      for (const pt of dailySeries) {
+        if (!pt.date) continue;
+        const vols = byDateVolumes[pt.date] ?? [];
+        const tot = byDateTotals[pt.date] ?? 0;
+        const dk = JS_DAY_TO_KEY[new Date(`${pt.date}T00:00:00Z`).getUTCDay()];
+        byDateCurves[pt.date] = tot > 0 ? vols.map((v) => (v / tot) * 100) : [...normCurves[dk]];
+      }
 
       return {
         format: 'long_interval',
         periodicityGuess: 'daily',
         dailySeries,
         granularityMinGuess: granularity,
-        dayCurves: normalizeCurves(accum, granularity),
+        dayCurves: normCurves,
+        byDateCurves,
+        byDateVolumes,
+        byDateTotals,
         timeLabels: generateTimeLabels(granularity),
         summaryNote: `Detected Long Interval table (${dailySeries.length} days, ${granularity}m).`,
       };
@@ -393,12 +450,14 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
   const valueIdx = cleanRows[startIdx]?.length > 1 ? (volCol >= 0 ? volCol : 1) : 0;
 
   const dailySeries: HistoricalPoint[] = [];
+  const byDateTotals: Record<string, number> = {};
   for (let i = startIdx; i < cleanRows.length; i++) {
     const r = cleanRows[i];
     if (isTotalRowLabel(r[0])) continue;
     const rawLabel = valueIdx === 0 ? `Period ${dailySeries.length + 1}` : String(r[labelIdx] ?? '').trim();
     const iso = valueIdx === 0 ? null : parseDateToIso(r[labelIdx]);
     const vol = Math.max(0, toNumberOrZero(r[valueIdx]));
+    if (iso) byDateTotals[iso] = vol;
     dailySeries.push({
       id: `pt-${dailySeries.length}`,
       label: iso ?? (rawLabel || `P${dailySeries.length + 1}`),
@@ -427,6 +486,7 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
     periodicityGuess,
     dailySeries,
     granularityMinGuess: 30,
+    byDateTotals: Object.keys(byDateTotals).length > 0 ? byDateTotals : undefined,
     summaryNote: `Parsed ${dailySeries.length} ${periodicityGuess} periods.`,
   };
 }
