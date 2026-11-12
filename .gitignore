@@ -25,3 +25,5 @@ dist/
 *.sln
 *.sw?
 .DS_Store
+
+.wrangler/
