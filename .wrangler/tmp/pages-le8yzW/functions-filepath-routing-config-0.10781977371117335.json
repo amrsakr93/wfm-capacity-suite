@@ -1,0 +1,37 @@
+{
+  "routes": [
+    {
+      "routePath": "/api/auth/logout",
+      "mountPath": "/api/auth",
+      "method": "",
+      "module": [
+        "api/auth/logout.ts:onRequest"
+      ]
+    },
+    {
+      "routePath": "/api/auth/request-otp",
+      "mountPath": "/api/auth",
+      "method": "",
+      "module": [
+        "api/auth/request-otp.ts:onRequest"
+      ]
+    },
+    {
+      "routePath": "/api/auth/session",
+      "mountPath": "/api/auth",
+      "method": "",
+      "module": [
+        "api/auth/session.ts:onRequest"
+      ]
+    },
+    {
+      "routePath": "/api/auth/verify-otp",
+      "mountPath": "/api/auth",
+      "method": "",
+      "module": [
+        "api/auth/verify-otp.ts:onRequest"
+      ]
+    }
+  ],
+  "baseURL": "/"
+}

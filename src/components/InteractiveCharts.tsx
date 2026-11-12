@@ -147,10 +147,10 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
   return (
     <div
       ref={containerRef}
-      className="relative w-full select-none rounded-2xl border border-[#00A3E0]/25 bg-[#001829]/75 dark:bg-[#001829]/85 p-4 shadow-inner"
+      className="cnx-chart-surface relative w-full select-none rounded-2xl border p-4 shadow-inner"
     >
       {/* Interactive Controls Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-2.5 border-b border-[#00A3E0]/15">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-2.5 border-b border-slate-200 dark:border-[#00A3E0]/15">
         {/* Clickable Series Toggle Pills */}
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -158,11 +158,11 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             onClick={() => setShowSeries((s) => ({ ...s, actual: !s.actual }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               showSeries.actual
-                ? 'border-[#00A3E0]/50 bg-[#00A3E0]/15 text-[#00A3E0]'
-                : 'border-slate-700/50 opacity-45 text-slate-400'
+                ? 'border-[#0073A8]/35 bg-[#0073A8]/10 text-[#0073A8] dark:border-[#00A3E0]/50 dark:bg-[#00A3E0]/15 dark:text-[#00A3E0]'
+                : 'border-slate-300 dark:border-slate-700/50 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-full bg-[#00A3E0] inline-block" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#0073A8] dark:bg-[#00A3E0] inline-block" />
             Actual History
           </button>
 
@@ -171,11 +171,11 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             onClick={() => setShowSeries((s) => ({ ...s, train: !s.train }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               showSeries.train
-                ? 'border-[#5B8FA8]/50 bg-[#003D5B]/40 text-slate-200'
-                : 'border-slate-700/50 opacity-45 text-slate-400'
+                ? 'border-slate-400/50 bg-slate-200/75 text-slate-700 dark:border-[#5B8FA8]/50 dark:bg-[#003D5B]/40 dark:text-slate-200'
+                : 'border-slate-300 dark:border-slate-700/50 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-3 h-0.5 border-t-2 border-dashed border-[#5B8FA8] inline-block" />
+            <span className="w-3 h-0.5 border-t-2 border-dashed border-slate-500 dark:border-[#5B8FA8] inline-block" />
             Train Fit (80%)
           </button>
 
@@ -184,11 +184,11 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             onClick={() => setShowSeries((s) => ({ ...s, holdout: !s.holdout }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               showSeries.holdout
-                ? 'border-[#00C389]/50 bg-[#00C389]/15 text-[#00C389]'
-                : 'border-slate-700/50 opacity-45 text-slate-400'
+                ? 'border-[#0D826E]/35 bg-[#0D826E]/10 text-[#0D826E] dark:border-[#00C389]/50 dark:bg-[#00C389]/15 dark:text-[#00C389]'
+                : 'border-slate-300 dark:border-slate-700/50 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-full bg-[#00C389] inline-block" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#0D826E] dark:bg-[#00C389] inline-block" />
             Holdout Backtest (20%)
           </button>
 
@@ -197,25 +197,25 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             onClick={() => setShowSeries((s) => ({ ...s, future: !s.future }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               showSeries.future
-                ? 'border-[#25E2CC]/60 bg-[#25E2CC]/15 text-[#25E2CC]'
-                : 'border-slate-700/50 opacity-45 text-slate-400'
+                ? 'border-[#0D9488]/40 bg-[#0D9488]/10 text-[#0F766E] dark:border-[#25E2CC]/60 dark:bg-[#25E2CC]/15 dark:text-[#25E2CC]'
+                : 'border-slate-300 dark:border-slate-700/50 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-full bg-[#25E2CC] animate-ping inline-block" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#0D9488] dark:bg-[#25E2CC] animate-ping inline-block" />
             Future Forecast
           </button>
         </div>
 
         {/* Interactive Chart Style & Zoom Switchers */}
         <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-lg border border-[#00A3E0]/30 bg-[#001421] p-0.5 text-[11px]">
+          <div className="inline-flex rounded-lg border border-slate-300 bg-white dark:border-[#00A3E0]/30 dark:bg-[#001421] p-0.5 text-[11px]">
             <button
               type="button"
               onClick={() => setChartStyle('spline')}
               className={`px-2.5 py-1 rounded-md font-bold transition cursor-pointer ${
                 chartStyle === 'spline'
-                  ? 'bg-[#00A3E0] text-white'
-                  : 'text-slate-400 hover:text-white'
+                  ? 'cnx-btn-active'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
               }`}
             >
               Glowing Spline
@@ -225,8 +225,8 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               onClick={() => setChartStyle('bars')}
               className={`px-2.5 py-1 rounded-md font-bold transition cursor-pointer ${
                 chartStyle === 'bars'
-                  ? 'bg-[#00A3E0] text-white'
-                  : 'text-slate-400 hover:text-white'
+                  ? 'cnx-btn-active'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
               }`}
             >
               Volume Bars
@@ -241,8 +241,8 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             }}
             className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer ${
               zoomFuture
-                ? 'border-[#25E2CC] bg-[#25E2CC]/20 text-[#25E2CC]'
-                : 'border-[#00A3E0]/30 bg-[#001421] text-slate-300 hover:border-[#00A3E0]'
+                ? 'border-[#0D9488] bg-[#0D9488]/15 text-[#0F766E] dark:border-[#25E2CC] dark:bg-[#25E2CC]/20 dark:text-[#25E2CC]'
+                : 'border-slate-300 bg-white text-slate-700 hover:border-[#0073A8] dark:border-[#00A3E0]/30 dark:bg-[#001421] dark:text-slate-300 dark:hover:border-[#00A3E0]'
             }`}
           >
             {zoomFuture ? 'Zoom: Last 28d + Future' : 'Zoom: Full Horizon'}
@@ -257,16 +257,16 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
       >
         <defs>
           <linearGradient id="actualAreaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#00A3E0" stopOpacity="0.36" />
-            <stop offset="100%" stopColor="#00A3E0" stopOpacity="0.0" />
+            <stop offset="0%" stopColor="var(--cnx-chart-actual)" stopOpacity="0.28" />
+            <stop offset="100%" stopColor="var(--cnx-chart-actual)" stopOpacity="0.0" />
           </linearGradient>
           <linearGradient id="holdoutAreaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#00C389" stopOpacity="0.32" />
-            <stop offset="100%" stopColor="#00C389" stopOpacity="0.0" />
+            <stop offset="0%" stopColor="var(--cnx-chart-holdout)" stopOpacity="0.24" />
+            <stop offset="100%" stopColor="var(--cnx-chart-holdout)" stopOpacity="0.0" />
           </linearGradient>
           <linearGradient id="futureAreaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#25E2CC" stopOpacity="0.42" />
-            <stop offset="100%" stopColor="#25E2CC" stopOpacity="0.02" />
+            <stop offset="0%" stopColor="var(--cnx-chart-future)" stopOpacity="0.32" />
+            <stop offset="100%" stopColor="var(--cnx-chart-future)" stopOpacity="0.02" />
           </linearGradient>
           <filter id="cnx-line-glow" x="-10%" y="-20%" width="120%" height="140%">
             <feGaussianBlur stdDeviation="3" result="blur" />
@@ -284,7 +284,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               y={padT}
               width={Math.max(0, w - padR - futureStartX)}
               height={plotH}
-              fill="rgba(37, 226, 204, 0.09)"
+              fill="var(--cnx-chart-horizon-bg)"
               rx={8}
             />
             <line
@@ -292,7 +292,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               y1={padT}
               x2={futureStartX}
               y2={padT + plotH}
-              stroke="#25E2CC"
+              stroke="var(--cnx-chart-future)"
               strokeWidth={1.6}
               strokeDasharray="4 4"
             />
@@ -302,14 +302,14 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               width={132}
               height={18}
               rx={5}
-              fill="rgba(0, 61, 91, 0.85)"
-              stroke="#25E2CC"
+              fill="var(--cnx-chart-horizon-badge)"
+              stroke="var(--cnx-chart-future)"
               strokeWidth={1}
             />
             <text
               x={futureStartX + 15}
               y={padT + 16}
-              fill="#25E2CC"
+              fill="var(--cnx-chart-future-text)"
               fontSize="10"
               fontWeight="700"
             >
@@ -328,14 +328,15 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
                 y1={y}
                 x2={w - padR}
                 y2={y}
-                stroke="rgba(0, 163, 224, 0.14)"
+                stroke="var(--cnx-chart-grid)"
                 strokeDasharray="3 3"
               />
               <text
                 x={padL - 8}
                 y={y + 4}
                 textAnchor="end"
-                className="fill-slate-400 text-[10px] font-mono"
+                fill="var(--cnx-chart-axis)"
+                className="text-[10px] font-mono"
               >
                 {val.toLocaleString()}
               </text>
@@ -353,9 +354,10 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               <path
                 d={toSmoothSpline(actualCoords)}
                 fill="none"
-                stroke="#00A3E0"
+                stroke="var(--cnx-chart-actual)"
                 strokeWidth={2.8}
                 filter="url(#cnx-line-glow)"
+                className="cnx-svg-glow"
                 strokeLinecap="round"
               />
             )}
@@ -363,7 +365,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               <path
                 d={toSmoothSpline(trainCoords)}
                 fill="none"
-                stroke="#7CC4E4"
+                stroke="var(--cnx-chart-train)"
                 strokeWidth={1.8}
                 strokeDasharray="5 4"
                 opacity={0.75}
@@ -373,9 +375,10 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               <path
                 d={toSmoothSpline(holdoutCoords)}
                 fill="none"
-                stroke="#00C389"
+                stroke="var(--cnx-chart-holdout)"
                 strokeWidth={3}
                 filter="url(#cnx-line-glow)"
+                className="cnx-svg-glow"
                 strokeLinecap="round"
               />
             )}
@@ -383,11 +386,11 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               <path
                 d={toSmoothSpline(futureCoords)}
                 fill="none"
-                stroke="#25E2CC"
+                stroke="var(--cnx-chart-future)"
                 strokeWidth={3.2}
                 filter="url(#cnx-line-glow)"
                 strokeLinecap="round"
-                className="cnx-chart-pulse-line"
+                className="cnx-chart-pulse-line cnx-svg-glow"
               />
             )}
             {/* Visible glowing nodes on Future Forecast points */}
@@ -397,8 +400,8 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
                 cx={c.x}
                 cy={c.y}
                 r={3.2}
-                fill="#25E2CC"
-                stroke="#001421"
+                fill="var(--cnx-chart-future)"
+                stroke="var(--cnx-chart-node-stroke)"
                 strokeWidth={1.2}
               />
             ))}
@@ -411,10 +414,10 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             const primaryVal = d.futurePred ?? d.holdoutPred ?? d.actual ?? 0;
             const barColor =
               d.futurePred !== undefined
-                ? '#25E2CC'
+                ? 'var(--cnx-chart-future)'
                 : d.holdoutPred !== undefined
-                  ? '#00C389'
-                  : '#00A3E0';
+                  ? 'var(--cnx-chart-holdout)'
+                  : 'var(--cnx-chart-actual)';
             const topY = yOf(primaryVal);
             const barH = Math.max(2, padT + plotH - topY);
             return (
@@ -426,7 +429,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
                 height={barH}
                 rx={2.5}
                 fill={barColor}
-                opacity={activeIdx === idx ? 1 : 0.82}
+                opacity={activeIdx === idx ? 1 : 0.85}
               />
             );
           })
@@ -442,10 +445,13 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               x={xOf(idx)}
               y={h - 8}
               textAnchor="middle"
-              className={`text-[10px] font-mono ${
+              fill={
                 d.futurePred !== undefined
-                  ? 'fill-[#25E2CC] font-bold'
-                  : 'fill-slate-400'
+                  ? 'var(--cnx-chart-future-text)'
+                  : 'var(--cnx-chart-axis)'
+              }
+              className={`text-[10px] font-mono ${
+                d.futurePred !== undefined ? 'font-bold' : ''
               }`}
             >
               {d.label.slice(-5)}
@@ -461,7 +467,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               y1={padT}
               x2={hoverX}
               y2={padT + plotH}
-              stroke="#25E2CC"
+              stroke="var(--cnx-chart-future)"
               strokeWidth={1.6}
               strokeDasharray="3 3"
             />
@@ -470,7 +476,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
                 cx={hoverX}
                 cy={yOf(hovered.actual)}
                 r={6}
-                fill="#00A3E0"
+                fill="var(--cnx-chart-actual)"
                 stroke="#ffffff"
                 strokeWidth={2}
               />
@@ -480,7 +486,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
                 cx={hoverX}
                 cy={yOf(hovered.holdoutPred)}
                 r={6}
-                fill="#00C389"
+                fill="var(--cnx-chart-holdout)"
                 stroke="#ffffff"
                 strokeWidth={2}
               />
@@ -490,7 +496,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
                 cx={hoverX}
                 cy={yOf(hovered.futurePred)}
                 r={6.5}
-                fill="#25E2CC"
+                fill="var(--cnx-chart-future)"
                 stroke="#ffffff"
                 strokeWidth={2}
               />
@@ -518,14 +524,14 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
 
       {hovered && activeIdx !== null && (
         <div
-          className="pointer-events-none absolute top-14 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
+          className="cnx-chart-tooltip pointer-events-none absolute top-14 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
           style={{
             left: `${Math.min(72, Math.max(4, (activeIdx / Math.max(1, visibleData.length - 1)) * 100))}%`,
           }}
         >
-          <div className="font-mono font-bold text-white mb-1 flex items-center justify-between gap-4">
+          <div className="font-mono font-bold text-[#0B2234] dark:text-white mb-1 flex items-center justify-between gap-4">
             <span>{hovered.label}</span>
-            <span className="px-1.5 py-0.5 rounded bg-[#00A3E0]/25 text-[#25E2CC] text-[10px] font-semibold">
+            <span className="px-1.5 py-0.5 rounded bg-[#0073A8]/15 text-[#0F766E] dark:bg-[#00A3E0]/25 dark:text-[#25E2CC] text-[10px] font-semibold">
               {hovered.futurePred !== undefined
                 ? 'Future Forecast'
                 : hovered.holdoutPred !== undefined
@@ -535,25 +541,25 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
           </div>
           <div className="space-y-0.5 font-mono text-[11px]">
             {hovered.actual !== undefined && (
-              <div className="flex justify-between gap-4 text-[#00A3E0]">
+              <div className="flex justify-between gap-4 text-[#0073A8] dark:text-[#00A3E0]">
                 <span>Actual Volume:</span>
                 <span className="font-bold">{hovered.actual.toLocaleString()}</span>
               </div>
             )}
             {hovered.trainFit !== undefined && (
-              <div className="flex justify-between gap-4 text-slate-300">
+              <div className="flex justify-between gap-4 text-slate-600 dark:text-slate-300">
                 <span>Model Fit (Train):</span>
                 <span className="font-bold">{hovered.trainFit.toLocaleString()}</span>
               </div>
             )}
             {hovered.holdoutPred !== undefined && (
-              <div className="flex justify-between gap-4 text-[#00C389]">
+              <div className="flex justify-between gap-4 text-[#0D826E] dark:text-[#00C389]">
                 <span>Holdout Forecast:</span>
                 <span className="font-bold">{hovered.holdoutPred.toLocaleString()}</span>
               </div>
             )}
             {hovered.futurePred !== undefined && (
-              <div className="flex justify-between gap-4 text-[#25E2CC]">
+              <div className="flex justify-between gap-4 text-[#0F766E] dark:text-[#25E2CC]">
                 <span>Projected Volume:</span>
                 <span className="font-bold">{hovered.futurePred.toLocaleString()}</span>
               </div>
@@ -593,18 +599,18 @@ export const InteractiveArrivalBarChart: React.FC<{
   }));
 
   return (
-    <div className="rounded-2xl border border-[#00A3E0]/25 bg-[#001829]/75 p-4 shadow-inner">
+    <div className="cnx-chart-surface rounded-2xl border p-4 shadow-inner">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-3">
         <div className="flex items-center gap-2">
-          <span className="font-bold text-slate-200">
+          <span className="font-bold text-slate-800 dark:text-slate-200">
             Intraday Arrival Pattern (%) Curve ({intervals.length} intervals)
           </span>
-          <div className="inline-flex rounded-lg border border-[#00A3E0]/30 bg-[#001421] p-0.5 text-[10px]">
+          <div className="inline-flex rounded-lg border border-slate-300 bg-white dark:border-[#00A3E0]/30 dark:bg-[#001421] p-0.5 text-[10px]">
             <button
               type="button"
               onClick={() => setViewMode('bars')}
               className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
-                viewMode === 'bars' ? 'bg-[#00A3E0] text-white' : 'text-slate-400'
+                viewMode === 'bars' ? 'cnx-btn-active' : 'text-slate-600 dark:text-slate-400'
               }`}
             >
               3D Bars
@@ -613,14 +619,14 @@ export const InteractiveArrivalBarChart: React.FC<{
               type="button"
               onClick={() => setViewMode('wave')}
               className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
-                viewMode === 'wave' ? 'bg-[#00A3E0] text-white' : 'text-slate-400'
+                viewMode === 'wave' ? 'cnx-btn-active' : 'text-slate-600 dark:text-slate-400'
               }`}
             >
               Spline Wave
             </button>
           </div>
         </div>
-        <span className="px-3 py-1 rounded-lg bg-[#00A3E0]/15 border border-[#25E2CC]/40 font-mono font-bold text-[#25E2CC]">
+        <span className="px-3 py-1 rounded-lg bg-[#0D9488]/10 border border-[#0D9488]/35 font-mono font-bold text-[#0F766E] dark:bg-[#00A3E0]/15 dark:border-[#25E2CC]/40 dark:text-[#25E2CC]">
           {hoverIdx !== null ? `Slot ${activeSlot.time}` : `Peak @ ${peakSlot.time}`} —{' '}
           {activeSlot.arrivalPct}% · {activeSlot.calls.toLocaleString()} calls
         </span>
@@ -645,13 +651,13 @@ export const InteractiveArrivalBarChart: React.FC<{
                   style={{
                     height: `${hPct}%`,
                     background: isHovered
-                      ? 'linear-gradient(180deg, #25E2CC 0%, #00C389 100%)'
+                      ? 'linear-gradient(180deg, var(--cnx-bar-hover-top) 0%, var(--cnx-bar-hover-bot) 100%)'
                       : isPeak
-                        ? 'linear-gradient(180deg, #25E2CC 0%, #00A3E0 100%)'
-                        : 'linear-gradient(180deg, #00A3E0 0%, #003D5B 100%)',
+                        ? 'linear-gradient(180deg, var(--cnx-bar-peak-top) 0%, var(--cnx-bar-peak-bot) 100%)'
+                        : 'linear-gradient(180deg, var(--cnx-bar-norm-top) 0%, var(--cnx-bar-norm-bot) 100%)',
                   }}
                   className={`w-full rounded-t-md transition-all duration-150 ${
-                    isHovered || isPeak ? 'shadow-md shadow-[#25E2CC]/40' : 'opacity-85 group-hover:opacity-100'
+                    isHovered || isPeak ? 'shadow-md shadow-[#0D9488]/30 dark:shadow-[#25E2CC]/40' : 'opacity-88 group-hover:opacity-100'
                   }`}
                 />
               </div>
@@ -666,8 +672,8 @@ export const InteractiveArrivalBarChart: React.FC<{
         >
           <defs>
             <linearGradient id="cnxArrivalWaveGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#25E2CC" stopOpacity="0.45" />
-              <stop offset="100%" stopColor="#00A3E0" stopOpacity="0.02" />
+              <stop offset="0%" stopColor="var(--cnx-chart-future)" stopOpacity="0.38" />
+              <stop offset="100%" stopColor="var(--cnx-chart-actual)" stopOpacity="0.02" />
             </linearGradient>
           </defs>
           {waveCoords.length > 1 && (
@@ -679,7 +685,7 @@ export const InteractiveArrivalBarChart: React.FC<{
               <path
                 d={toSmoothSpline(waveCoords)}
                 fill="none"
-                stroke="#25E2CC"
+                stroke="var(--cnx-chart-future)"
                 strokeWidth={3}
               />
             </>
@@ -701,7 +707,7 @@ export const InteractiveArrivalBarChart: React.FC<{
         </svg>
       )}
 
-      <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1.5">
+      <div className="flex justify-between text-[10px] font-mono text-slate-600 dark:text-slate-400 mt-1.5">
         <span>00:00</span>
         <span>06:00</span>
         <span>12:00</span>
@@ -753,20 +759,20 @@ export const InteractiveStaffingChart: React.FC<{
   return (
     <div
       ref={containerRef}
-      className="relative w-full select-none rounded-2xl border border-[#00A3E0]/25 bg-[#001829]/75 p-4 shadow-inner"
+      className="cnx-chart-surface relative w-full select-none rounded-2xl border p-4 shadow-inner"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-3 pb-2 border-b border-[#00A3E0]/15">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-3 pb-2 border-b border-slate-200 dark:border-[#00A3E0]/15">
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setLayers((l) => ({ ...l, seats: !l.seats }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               layers.seats
-                ? 'border-[#00A3E0]/50 bg-[#00A3E0]/15 text-[#00A3E0]'
-                : 'border-slate-700 opacity-45 text-slate-400'
+                ? 'border-[#0073A8]/35 bg-[#0073A8]/10 text-[#0073A8] dark:border-[#00A3E0]/50 dark:bg-[#00A3E0]/15 dark:text-[#00A3E0]'
+                : 'border-slate-300 dark:border-slate-700 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-xs bg-[#00A3E0] inline-block" />
+            <span className="w-2.5 h-2.5 rounded-xs bg-[#0073A8] dark:bg-[#00A3E0] inline-block" />
             {agentMode === 'fractional'
               ? 'Required Seats (=FractionalAgents)'
               : 'Required Seats (=Agents)'}
@@ -777,11 +783,11 @@ export const InteractiveStaffingChart: React.FC<{
             onClick={() => setLayers((l) => ({ ...l, traffic: !l.traffic }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               layers.traffic
-                ? 'border-[#00C389]/50 bg-[#00C389]/15 text-[#00C389]'
-                : 'border-slate-700 opacity-45 text-slate-400'
+                ? 'border-[#0D826E]/35 bg-[#0D826E]/10 text-[#0D826E] dark:border-[#00C389]/50 dark:bg-[#00C389]/15 dark:text-[#00C389]'
+                : 'border-slate-300 dark:border-slate-700 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-xs bg-[#00C389] inline-block" />
+            <span className="w-2.5 h-2.5 rounded-xs bg-[#0D826E] dark:bg-[#00C389] inline-block" />
             Offered Traffic (Erlangs A)
           </button>
 
@@ -790,11 +796,11 @@ export const InteractiveStaffingChart: React.FC<{
             onClick={() => setLayers((l) => ({ ...l, sla: !l.sla }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               layers.sla
-                ? 'border-[#25E2CC]/50 bg-[#25E2CC]/15 text-[#25E2CC]'
-                : 'border-slate-700 opacity-45 text-slate-400'
+                ? 'border-[#0D9488]/40 bg-[#0D9488]/10 text-[#0F766E] dark:border-[#25E2CC]/50 dark:bg-[#25E2CC]/15 dark:text-[#25E2CC]'
+                : 'border-slate-300 dark:border-slate-700 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-3 h-0.5 border-t-2 border-dashed border-[#25E2CC] inline-block" />
+            <span className="w-3 h-0.5 border-t-2 border-dashed border-[#0D9488] dark:border-[#25E2CC] inline-block" />
             Expected SLA %
           </button>
 
@@ -803,15 +809,15 @@ export const InteractiveStaffingChart: React.FC<{
             onClick={() => setLayers((l) => ({ ...l, occupancy: !l.occupancy }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               layers.occupancy
-                ? 'border-[#7CC4E4]/50 bg-[#003D5B]/40 text-[#7CC4E4]'
-                : 'border-slate-700 opacity-45 text-slate-400'
+                ? 'border-[#005A8D]/35 bg-[#005A8D]/10 text-[#005A8D] dark:border-[#7CC4E4]/50 dark:bg-[#003D5B]/40 dark:text-[#7CC4E4]'
+                : 'border-slate-300 dark:border-slate-700 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-3 h-0.5 bg-[#7CC4E4] inline-block" />
+            <span className="w-3 h-0.5 bg-[#005A8D] dark:bg-[#7CC4E4] inline-block" />
             Occupancy %
           </button>
         </div>
-        <span className="text-[11px] text-slate-400">
+        <span className="text-[11px] text-slate-600 dark:text-slate-400">
           Click any legend pill to toggle layer · Hover any interval for telemetry
         </span>
       </div>
@@ -823,12 +829,12 @@ export const InteractiveStaffingChart: React.FC<{
       >
         <defs>
           <linearGradient id="cnxSeatBarGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#25E2CC" />
-            <stop offset="100%" stopColor="#00A3E0" />
+            <stop offset="0%" stopColor="var(--cnx-seat-top)" />
+            <stop offset="100%" stopColor="var(--cnx-seat-bot)" />
           </linearGradient>
           <linearGradient id="cnxErlangBarGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#00C389" />
-            <stop offset="100%" stopColor="#003D5B" />
+            <stop offset="0%" stopColor="var(--cnx-erlang-top)" />
+            <stop offset="100%" stopColor="var(--cnx-erlang-bot)" />
           </linearGradient>
         </defs>
 
@@ -843,14 +849,15 @@ export const InteractiveStaffingChart: React.FC<{
                 y1={y}
                 x2={w - padX}
                 y2={y}
-                stroke="rgba(0, 163, 224, 0.14)"
+                stroke="var(--cnx-chart-grid)"
                 strokeDasharray="3 3"
               />
               <text
                 x={padX - 6}
                 y={y + 4}
                 textAnchor="end"
-                className="fill-slate-400 text-[10px] font-mono"
+                fill="var(--cnx-chart-axis)"
+                className="text-[10px] font-mono"
               >
                 {seatLbl}
               </text>
@@ -858,7 +865,8 @@ export const InteractiveStaffingChart: React.FC<{
                 x={w - padX + 6}
                 y={y + 4}
                 textAnchor="start"
-                className="fill-[#25E2CC] text-[10px] font-mono"
+                fill="var(--cnx-chart-future-text)"
+                className="text-[10px] font-mono font-semibold"
               >
                 {occLbl}%
               </text>
@@ -882,7 +890,7 @@ export const InteractiveStaffingChart: React.FC<{
                   height={hSeats}
                   rx={2.5}
                   fill="url(#cnxSeatBarGrad)"
-                  opacity={isHovered ? 1 : 0.88}
+                  opacity={isHovered ? 1 : 0.9}
                 />
               )}
               {layers.traffic && (
@@ -900,13 +908,13 @@ export const InteractiveStaffingChart: React.FC<{
         })}
 
         {layers.occupancy && (
-          <path d={toSmoothSpline(occCoords)} fill="none" stroke="#7CC4E4" strokeWidth={2.3} />
+          <path d={toSmoothSpline(occCoords)} fill="none" stroke="var(--cnx-chart-occ)" strokeWidth={2.3} />
         )}
         {layers.sla && (
           <path
             d={toSmoothSpline(slaCoords)}
             fill="none"
-            stroke="#25E2CC"
+            stroke="var(--cnx-chart-future)"
             strokeWidth={2.3}
             strokeDasharray="4 3"
           />
@@ -918,7 +926,7 @@ export const InteractiveStaffingChart: React.FC<{
             y1={padY}
             x2={padX + (hoverIdx + 0.5) * slotW}
             y2={padY + plotH}
-            stroke="#25E2CC"
+            stroke="var(--cnx-chart-future)"
             strokeWidth={1.6}
             strokeDasharray="3 3"
           />
@@ -939,36 +947,36 @@ export const InteractiveStaffingChart: React.FC<{
 
       {hovered && hoverIdx !== null && (
         <div
-          className="pointer-events-none absolute top-12 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
+          className="cnx-chart-tooltip pointer-events-none absolute top-12 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
           style={{
             left: `${Math.min(74, Math.max(5, (hoverIdx / Math.max(1, rows.length - 1)) * 100))}%`,
           }}
         >
-          <div className="font-mono font-bold text-[#25E2CC] mb-1">
+          <div className="font-mono font-bold text-[#0F766E] dark:text-[#25E2CC] mb-1">
             Interval {hovered.timeLabel}
           </div>
           <div className="space-y-0.5 font-mono text-[11px]">
-            <div className="flex justify-between gap-4 text-slate-200">
+            <div className="flex justify-between gap-4 text-slate-700 dark:text-slate-200">
               <span>Calls Offered:</span>
               <span className="font-bold">{hovered.volume.toLocaleString()}</span>
             </div>
-            <div className="flex justify-between gap-4 text-[#00C389]">
+            <div className="flex justify-between gap-4 text-[#0D826E] dark:text-[#00C389]">
               <span>Traffic (Erlangs A):</span>
               <span className="font-bold">{hovered.erlangs.toFixed(2)} E</span>
             </div>
-            <div className="flex justify-between gap-4 text-[#00A3E0]">
+            <div className="flex justify-between gap-4 text-[#0073A8] dark:text-[#00A3E0]">
               <span>Integer / Fractional:</span>
               <span className="font-bold">
                 {hovered.integerSeats} / {hovered.fractionalSeats.toFixed(2)}
               </span>
             </div>
-            <div className="flex justify-between gap-4 text-[#25E2CC]">
+            <div className="flex justify-between gap-4 text-[#0F766E] dark:text-[#25E2CC]">
               <span>Expected SLA / ASA:</span>
               <span className="font-bold">
                 {hovered.slPct.toFixed(1)}% ({hovered.asaSec.toFixed(1)}s)
               </span>
             </div>
-            <div className="flex justify-between gap-4 text-[#7CC4E4]">
+            <div className="flex justify-between gap-4 text-[#005A8D] dark:text-[#7CC4E4]">
               <span>Occupancy:</span>
               <span className="font-bold">{hovered.occupancyPct.toFixed(1)}%</span>
             </div>

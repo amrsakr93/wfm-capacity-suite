@@ -10,6 +10,72 @@
   --cnx-blue-soft: #38bdf8;
   --cnx-teal-accent: #14b8a6;
   --cnx-teal-soft: #2dd4bf;
+
+  /* Chart Theme Tokens (Default / Night Mode) */
+  --cnx-chart-bg: rgba(0, 24, 41, 0.82);
+  --cnx-chart-border: rgba(0, 163, 224, 0.25);
+  --cnx-chart-grid: rgba(0, 163, 224, 0.14);
+  --cnx-chart-axis: #94a3b8;
+  --cnx-chart-actual: #00a3e0;
+  --cnx-chart-train: #7cc4e4;
+  --cnx-chart-holdout: #00c389;
+  --cnx-chart-future: #25e2cc;
+  --cnx-chart-future-text: #25e2cc;
+  --cnx-chart-occ: #7cc4e4;
+  --cnx-chart-node-stroke: #001421;
+  --cnx-chart-horizon-bg: rgba(37, 226, 204, 0.09);
+  --cnx-chart-horizon-badge: rgba(0, 61, 91, 0.88);
+  --cnx-bar-norm-top: #00a3e0;
+  --cnx-bar-norm-bot: #003d5b;
+  --cnx-bar-peak-top: #25e2cc;
+  --cnx-bar-peak-bot: #00a3e0;
+  --cnx-bar-hover-top: #25e2cc;
+  --cnx-bar-hover-bot: #00c389;
+  --cnx-seat-top: #25e2cc;
+  --cnx-seat-bot: #00a3e0;
+  --cnx-erlang-top: #00c389;
+  --cnx-erlang-bot: #003d5b;
+}
+
+html.light {
+  --cnx-chart-bg: #f6f9fc;
+  --cnx-chart-border: #d5e2ee;
+  --cnx-chart-grid: rgba(11, 34, 52, 0.1);
+  --cnx-chart-axis: #475569;
+  --cnx-chart-actual: #0073a8;
+  --cnx-chart-train: #64748b;
+  --cnx-chart-holdout: #0d826e;
+  --cnx-chart-future: #0d9488;
+  --cnx-chart-future-text: #0f766e;
+  --cnx-chart-occ: #005a8d;
+  --cnx-chart-node-stroke: #ffffff;
+  --cnx-chart-horizon-bg: rgba(13, 148, 136, 0.08);
+  --cnx-chart-horizon-badge: #e6f6f4;
+  --cnx-bar-norm-top: #0088c2;
+  --cnx-bar-norm-bot: #004f77;
+  --cnx-bar-peak-top: #14b8a6;
+  --cnx-bar-peak-bot: #0073a8;
+  --cnx-bar-hover-top: #0d9488;
+  --cnx-bar-hover-bot: #0f766e;
+  --cnx-seat-top: #0088c2;
+  --cnx-seat-bot: #005a8d;
+  --cnx-erlang-top: #0d9488;
+  --cnx-erlang-bot: #0b4f4a;
+}
+
+.cnx-chart-surface {
+  background-color: var(--cnx-chart-bg);
+  border-color: var(--cnx-chart-border);
+}
+
+html.light .cnx-btn-active {
+  background-color: #0073a8 !important;
+  color: #ffffff !important;
+}
+
+html.dark .cnx-btn-active {
+  background-color: #00a3e0 !important;
+  color: #ffffff !important;
 }
 
 @layer base {
@@ -278,6 +344,16 @@ html.light .bg-indigo-600 *,
 html.light .btn-cnx-primary *,
 html.light .btn-cnx-teal * {
   color: #ffffff !important;
+}
+
+html.light .cnx-svg-glow {
+  filter: none !important;
+}
+
+html.light .cnx-chart-tooltip {
+  background-color: rgba(255, 255, 255, 0.97) !important;
+  border-color: rgba(13, 148, 136, 0.4) !important;
+  color: #0b2234 !important;
 }
 
 /* ============================================================================
