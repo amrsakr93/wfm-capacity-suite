@@ -35,6 +35,7 @@
   --cnx-seat-bot: #00a3e0;
   --cnx-erlang-top: #00c389;
   --cnx-erlang-bot: #003d5b;
+  --cnx-bar-glow: rgba(37, 226, 204, 0.46);
 }
 
 html.light {
@@ -61,6 +62,7 @@ html.light {
   --cnx-seat-bot: #005a8d;
   --cnx-erlang-top: #0d9488;
   --cnx-erlang-bot: #0b4f4a;
+  --cnx-bar-glow: rgba(13, 148, 136, 0.34);
 }
 
 .cnx-chart-surface {
@@ -493,6 +495,68 @@ html.light .cnx-chart-tooltip {
   animation: pulseGlow 2.2s ease-in-out infinite;
 }
 
+/* ============================================================================
+   INTERACTIVE CHART BAR MOTION & MAGNETIC HOVER RIPPLE
+   ============================================================================ */
+@keyframes cnxBarRise {
+  0% {
+    opacity: 0.35;
+    transform: scaleY(0.14);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+.cnx-bar-enter {
+  transform-origin: bottom center;
+  animation: cnxBarRise 420ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.cnx-svg-bar-enter {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: cnxBarRise 420ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.cnx-html-bar-slot {
+  transition: height 360ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cnx-html-bar {
+  transform-origin: bottom center;
+  transition:
+    transform 210ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 170ms ease,
+    filter 170ms ease,
+    box-shadow 180ms ease;
+}
+
+.cnx-svg-bar {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  transition:
+    transform 210ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 170ms ease,
+    filter 170ms ease,
+    height 340ms cubic-bezier(0.16, 1, 0.3, 1),
+    y 340ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cnx-waterfall-bar {
+  transform-origin: left center;
+  transition:
+    width 460ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 180ms ease,
+    opacity 180ms ease;
+}
+
+.cnx-tooltip-glide {
+  transition: left 95ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-icon-glow,
   .cnx-orbit-cw,
@@ -505,8 +569,22 @@ html.light .cnx-chart-tooltip {
   .cnx-stream-right,
   .cnx-node-blink-1,
   .cnx-node-blink-2,
-  .cnx-node-blink-3 {
+  .cnx-node-blink-3,
+  .cnx-bar-enter,
+  .cnx-svg-bar-enter {
     animation: none !important;
+  }
+
+  .cnx-html-bar,
+  .cnx-svg-bar,
+  .cnx-waterfall-bar {
+    transform: none !important;
+    transition: opacity 160ms ease, filter 160ms ease !important;
+  }
+
+  .cnx-html-bar-slot,
+  .cnx-tooltip-glide {
+    transition: none !important;
   }
 }
 

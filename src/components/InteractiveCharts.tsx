@@ -55,6 +55,46 @@ function toSmoothSpline(coords: { x: number; y: number }[]): string {
   return d;
 }
 
+/** Shared magnetic proximity ripple transform & focus opacity across all bar charts */
+function getBarWaveStyle(
+  idx: number,
+  hoverIdx: number | null,
+  baseOpacity = 0.88,
+  scaleBoost = 1
+): React.CSSProperties {
+  if (hoverIdx === null) {
+    return {
+      opacity: baseOpacity,
+      transform: 'translateY(0px) scaleX(1) scaleY(1)',
+    };
+  }
+  const dist = Math.abs(idx - hoverIdx);
+  if (dist === 0) {
+    return {
+      opacity: 1,
+      transform: `translateY(-2px) scaleX(${(1 + 0.12 * scaleBoost).toFixed(3)}) scaleY(${(1 + 0.07 * scaleBoost).toFixed(3)})`,
+      filter: 'brightness(1.16) drop-shadow(0 0 7px var(--cnx-bar-glow))',
+    };
+  }
+  if (dist === 1) {
+    return {
+      opacity: 0.96,
+      transform: `translateY(-1px) scaleX(${(1 + 0.05 * scaleBoost).toFixed(3)}) scaleY(${(1 + 0.038 * scaleBoost).toFixed(3)})`,
+      filter: 'brightness(1.06)',
+    };
+  }
+  if (dist === 2) {
+    return {
+      opacity: 0.9,
+      transform: `translateY(-0.5px) scaleX(${(1 + 0.02 * scaleBoost).toFixed(3)}) scaleY(${(1 + 0.016 * scaleBoost).toFixed(3)})`,
+    };
+  }
+  return {
+    opacity: Math.max(0.54, baseOpacity - 0.28),
+    transform: 'translateY(0px) scaleX(1) scaleY(1)',
+  };
+}
+
 export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = ({ data }) => {
   const [containerRef, w] = useContainerWidth(1480);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -420,17 +460,24 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
                   : 'var(--cnx-chart-actual)';
             const topY = yOf(primaryVal);
             const barH = Math.max(2, padT + plotH - topY);
+            const delayMs = Math.round((idx / Math.max(1, visibleData.length - 1)) * 280);
             return (
-              <rect
+              <g
                 key={idx}
-                x={xCenter - barW / 2}
-                y={topY}
-                width={barW}
-                height={barH}
-                rx={2.5}
-                fill={barColor}
-                opacity={activeIdx === idx ? 1 : 0.85}
-              />
+                className="cnx-svg-bar-enter"
+                style={{ animationDelay: `${delayMs}ms` }}
+              >
+                <rect
+                  x={xCenter - barW / 2}
+                  y={topY}
+                  width={barW}
+                  height={barH}
+                  rx={2.5}
+                  fill={barColor}
+                  className="cnx-svg-bar"
+                  style={getBarWaveStyle(idx, activeIdx, 0.85, visibleData.length > 35 ? 1 : 0.75)}
+                />
+              </g>
             );
           })
         )}
@@ -524,7 +571,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
 
       {hovered && activeIdx !== null && (
         <div
-          className="cnx-chart-tooltip pointer-events-none absolute top-14 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
+          className="cnx-chart-tooltip cnx-tooltip-glide pointer-events-none absolute top-14 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
           style={{
             left: `${Math.min(72, Math.max(4, (activeIdx / Math.max(1, visibleData.length - 1)) * 100))}%`,
           }}
@@ -634,32 +681,44 @@ export const InteractiveArrivalBarChart: React.FC<{
 
       {viewMode === 'bars' ? (
         <div
-          className="h-44 flex items-end gap-1 pt-2 px-1"
+          className="h-44 flex items-end gap-1 pt-3 px-1"
           onMouseLeave={() => setHoverIdx(null)}
         >
           {intervals.map((slot, idx) => {
             const hPct = Math.max(6, (slot.arrivalPct / maxPct) * 100);
             const isPeak = slot.time === peakSlot.time;
             const isHovered = idx === hoverIdx;
+            const waveStyle = getBarWaveStyle(idx, hoverIdx, 0.88);
+            const delayMs = Math.round((idx / Math.max(1, intervals.length - 1)) * 280);
             return (
               <div
                 key={slot.time}
                 onMouseEnter={() => setHoverIdx(idx)}
-                className="flex-1 h-full flex flex-col justify-end items-center cursor-pointer group"
+                className={`relative flex-1 h-full flex flex-col justify-end items-center cursor-pointer group ${
+                  isHovered ? 'z-10' : 'z-0'
+                }`}
               >
                 <div
                   style={{
                     height: `${hPct}%`,
-                    background: isHovered
-                      ? 'linear-gradient(180deg, var(--cnx-bar-hover-top) 0%, var(--cnx-bar-hover-bot) 100%)'
-                      : isPeak
-                        ? 'linear-gradient(180deg, var(--cnx-bar-peak-top) 0%, var(--cnx-bar-peak-bot) 100%)'
-                        : 'linear-gradient(180deg, var(--cnx-bar-norm-top) 0%, var(--cnx-bar-norm-bot) 100%)',
+                    animationDelay: `${delayMs}ms`,
                   }}
-                  className={`w-full rounded-t-md transition-all duration-150 ${
-                    isHovered || isPeak ? 'shadow-md shadow-[#0D9488]/30 dark:shadow-[#25E2CC]/40' : 'opacity-88 group-hover:opacity-100'
-                  }`}
-                />
+                  className="w-full flex items-end cnx-html-bar-slot cnx-bar-enter"
+                >
+                  <div
+                    style={{
+                      ...waveStyle,
+                      background: isHovered
+                        ? 'linear-gradient(180deg, var(--cnx-bar-hover-top) 0%, var(--cnx-bar-hover-bot) 100%)'
+                        : isPeak
+                          ? 'linear-gradient(180deg, var(--cnx-bar-peak-top) 0%, var(--cnx-bar-peak-bot) 100%)'
+                          : 'linear-gradient(180deg, var(--cnx-bar-norm-top) 0%, var(--cnx-bar-norm-bot) 100%)',
+                    }}
+                    className={`w-full h-full rounded-t-md cnx-html-bar ${
+                      isHovered || isPeak ? 'shadow-md shadow-[#0D9488]/30 dark:shadow-[#25E2CC]/40' : ''
+                    }`}
+                  />
+                </div>
               </div>
             );
           })}
@@ -879,9 +938,15 @@ export const InteractiveStaffingChart: React.FC<{
           const barW = Math.max(3, slotW * 0.72);
           const hSeats = Math.max(0, (r.requiredSeats / yMaxSeats) * plotH);
           const hErlangs = Math.max(0, (r.erlangs / yMaxSeats) * plotH);
-          const isHovered = idx === hoverIdx;
+          const delayMs = Math.round((idx / Math.max(1, rows.length - 1)) * 280);
+          const seatWave = getBarWaveStyle(idx, hoverIdx, 0.9);
+          const erlangWave = getBarWaveStyle(idx, hoverIdx, 0.95, 0.85);
           return (
-            <g key={r.index}>
+            <g
+              key={r.index}
+              className="cnx-svg-bar-enter"
+              style={{ animationDelay: `${delayMs}ms` }}
+            >
               {layers.seats && (
                 <rect
                   x={xCenter - barW / 2}
@@ -890,7 +955,8 @@ export const InteractiveStaffingChart: React.FC<{
                   height={hSeats}
                   rx={2.5}
                   fill="url(#cnxSeatBarGrad)"
-                  opacity={isHovered ? 1 : 0.9}
+                  className="cnx-svg-bar"
+                  style={seatWave}
                 />
               )}
               {layers.traffic && (
@@ -901,6 +967,8 @@ export const InteractiveStaffingChart: React.FC<{
                   height={hErlangs}
                   rx={1.5}
                   fill="url(#cnxErlangBarGrad)"
+                  className="cnx-svg-bar"
+                  style={erlangWave}
                 />
               )}
             </g>
@@ -947,7 +1015,7 @@ export const InteractiveStaffingChart: React.FC<{
 
       {hovered && hoverIdx !== null && (
         <div
-          className="cnx-chart-tooltip pointer-events-none absolute top-12 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
+          className="cnx-chart-tooltip cnx-tooltip-glide pointer-events-none absolute top-12 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
           style={{
             left: `${Math.min(74, Math.max(5, (hoverIdx / Math.max(1, rows.length - 1)) * 100))}%`,
           }}

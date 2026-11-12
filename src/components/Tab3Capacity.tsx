@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Users,
   Layers,
@@ -57,6 +57,7 @@ export const Tab3Capacity: React.FC<Props> = ({
   slThresholdSec,
   onExportExcel,
 }) => {
+  const [hoverWaterfallIdx, setHoverWaterfallIdx] = useState<number | null>(null);
   const maxWaterfallFte = Math.max(...result.waterfall.map((w) => w.fte), 1);
 
   // Live Monthly Cap Plan Erlang C calculation (Spreadsheet Parity: e.g. 81,563 -> 2,719/d -> 113.28/hr -> 13/hr -> 312h/d -> 79 Agents)
@@ -1019,12 +1020,22 @@ export const Tab3Capacity: React.FC<Props> = ({
             </span>
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-3" onMouseLeave={() => setHoverWaterfallIdx(null)}>
             {result.waterfall.map((step, idx) => {
               const widthPct = Math.min(100, Math.max(6, (step.fte / maxWaterfallFte) * 100));
               const isFinal = idx === result.waterfall.length - 1;
+              const isHovered = hoverWaterfallIdx === idx;
+              const isAdjacent =
+                hoverWaterfallIdx !== null && Math.abs(hoverWaterfallIdx - idx) === 1;
+              const rowDimmed = hoverWaterfallIdx !== null && !isHovered && !isAdjacent;
               return (
-                <div key={step.id} className="space-y-1">
+                <div
+                  key={step.id}
+                  onMouseEnter={() => setHoverWaterfallIdx(idx)}
+                  className={`space-y-1 cursor-pointer transition-opacity duration-200 ${
+                    rowDimmed ? 'opacity-65' : 'opacity-100'
+                  }`}
+                >
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-medium text-slate-800 dark:text-slate-200">
                       {idx + 1}. {step.labelEn}
@@ -1048,8 +1059,18 @@ export const Tab3Capacity: React.FC<Props> = ({
                   </div>
                   <div className="w-full h-5 rounded-md bg-slate-100 dark:bg-slate-800 overflow-hidden flex items-center px-2">
                     <div
-                      style={{ width: `${widthPct}%` }}
-                      className={`h-3 rounded-xs transition-all ${
+                      style={{
+                        width: `${widthPct}%`,
+                        transform: isHovered
+                          ? 'scaleY(1.25) scaleX(1.015)'
+                          : isAdjacent
+                            ? 'scaleY(1.08)'
+                            : 'scaleY(1)',
+                        filter: isHovered
+                          ? 'brightness(1.15) drop-shadow(0 0 6px var(--cnx-bar-glow))'
+                          : undefined,
+                      }}
+                      className={`h-3 rounded-xs cnx-waterfall-bar ${
                         isFinal
                           ? 'bg-emerald-500'
                           : idx === 0
