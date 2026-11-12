@@ -161,7 +161,7 @@ describe('Capacity & Shrinkage FTE Waterfall (No Double-Counting)', () => {
   });
 });
 
-describe('Conrad Carlberg Forecasting Studio Engine (All 12 Book Methods)', () => {
+describe('Statistical Forecasting Studio Engine (All 12 Time-Series Methods)', () => {
   it('computes exact OLS slope, intercept and R2 = 1 on noiseless linear series', () => {
     const series = [110, 120, 130, 140, 150, 160];
     const ols = fitOLS(series);
@@ -170,7 +170,7 @@ describe('Conrad Carlberg Forecasting Studio Engine (All 12 Book Methods)', () =
     assert.ok(Math.abs(ols.r2 - 1) < 1e-6);
   });
 
-  it('auto-optimizes all 12 Carlberg models with chronological 80/20 holdout & builds Next Week / Current Month / Next Month horizons', () => {
+  it('auto-optimizes all 12 forecasting models with chronological 80/20 holdout & builds Next Week / Current Month / Next Month horizons', () => {
     const sample = buildSampleDailyHistory();
     const out = runForecastingStudio(sample, {
       periodicity: 'daily',
@@ -189,7 +189,7 @@ describe('Conrad Carlberg Forecasting Studio Engine (All 12 Book Methods)', () =
     assert.equal(out.cleanedSeries.length, 56);
     assert.equal(out.trainLength, 45);
     assert.equal(out.holdoutLength, 11);
-    assert.equal(out.models.length, 12); // All 12 Conrad Carlberg methods!
+    assert.equal(out.models.length, 12); // All 12 statistical methods!
     const best = out.models.find((m) => m.isBest)!;
     assert.ok(best.holdoutMetrics.wmape < 12, `Expected accurate seasonal holdout <12%, got ${best.holdoutMetrics.wmape}`);
     assert.equal(best.futureForecast.length, 7);

@@ -78,73 +78,73 @@ const ALL_12_MODEL_META: Record<
 > = {
   sma: {
     nameEn: '1. Unweighted Moving Average (SMA)',
-    chapterTag: 'Carlberg Ch. 3',
+    chapterTag: 'Moving Average',
     badgeColor: 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
     descEn: 'Equal-weight rolling average of the last N observations.',
   },
   wma: {
     nameEn: '2. Weighted Moving Average (WMA)',
-    chapterTag: 'Carlberg Ch. 3',
+    chapterTag: 'Weighted MA',
     badgeColor: 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
     descEn: 'Recency-weighted rolling window assigning highest weight to latest periods.',
   },
   cma_decomposition: {
     nameEn: '3. Classical CMA Seasonal Decomposition',
-    chapterTag: 'Carlberg Ch. 3 & 7',
+    chapterTag: 'Decomposition',
     badgeColor: 'bg-purple-500/15 text-purple-600 dark:text-purple-300',
     descEn: 'Centered Moving Average (CMA) ratio-to-MA seasonal indices + deseasonalized trend.',
   },
   ses: {
     nameEn: '4. Simple Exponential Smoothing (SES)',
-    chapterTag: 'Carlberg Ch. 4',
+    chapterTag: 'Single Smoothing',
     badgeColor: 'bg-sky-500/15 text-sky-600 dark:text-sky-300',
     descEn: 'Single-parameter level smoothing F(t+1) = αY(t) + (1-α)F(t) via MultiStart.',
   },
   ses_differenced: {
     nameEn: '5. First-Differenced Exponential Smoothing (ΔY)',
-    chapterTag: 'Carlberg Ch. 4',
+    chapterTag: 'Differenced SES',
     badgeColor: 'bg-sky-500/15 text-sky-600 dark:text-sky-300',
     descEn: 'Applies SES to first differences ΔY(t) = Y(t) - Y(t-1) to eliminate trend lag.',
   },
   holt: {
     nameEn: "6. Holt's Linear Exponential Smoothing",
-    chapterTag: 'Carlberg Ch. 4',
+    chapterTag: 'Double (Holt)',
     badgeColor: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-300',
     descEn: 'Two-parameter smoothing tracking both level (α) and linear trend slope (γ).',
   },
   holt_damped: {
     nameEn: '7. Damped-Trend Exponential Smoothing (φ)',
-    chapterTag: 'Carlberg Ch. 4 & 12',
+    chapterTag: 'Damped Trend',
     badgeColor: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-300',
     descEn: 'Dampens runaway linear trends over longer horizons using autoregressive damping φ.',
   },
   holt_winters_add: {
     nameEn: '8. Holt-Winters Additive Seasonal',
-    chapterTag: 'Carlberg Ch. 8',
+    chapterTag: 'Triple (Additive)',
     badgeColor: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
     descEn: 'Triple smoothing for level (α), trend (γ), and additive seasonal cycle (δ).',
   },
   holt_winters_mult: {
     nameEn: '9. Holt-Winters Multiplicative Seasonal',
-    chapterTag: 'Carlberg Ch. 8',
+    chapterTag: 'Triple (Multiplicative)',
     badgeColor: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
     descEn: 'Proportional seasonal ratios (Y / L) ideal for scaling contact center volume.',
   },
   linear_regression: {
     nameEn: '10. Simple Linear Regression (OLS TREND)',
-    chapterTag: 'Carlberg Ch. 2 & 5',
+    chapterTag: 'Linear Regression',
     badgeColor: 'bg-amber-500/15 text-amber-600 dark:text-amber-300',
     descEn: 'Ordinary Least Squares trend line Y = a + bt with Slope, Intercept & R².',
   },
   multiple_regression: {
     nameEn: '11. Multiple Regression (Trend + Seasonal Dummies)',
-    chapterTag: 'Carlberg Ch. 6',
+    chapterTag: 'Multiple Regression',
     badgeColor: 'bg-amber-500/15 text-amber-600 dark:text-amber-300',
     descEn: 'Simultaneous OLS regression on time trend t plus m-1 seasonal indicator variables.',
   },
   box_jenkins_ar: {
     nameEn: '12. Box-Jenkins Autoregressive (AR / Seasonal ARIMA)',
-    chapterTag: 'Carlberg Ch. 9 & 10',
+    chapterTag: 'Autoregressive AR',
     badgeColor: 'bg-rose-500/15 text-rose-600 dark:text-rose-300',
     descEn: 'Autoregressive lag model combining Lag-1 ACF (φ₁) and Seasonal Lag-m (Φₘ).',
   },
@@ -421,7 +421,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                 </h2>
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
                   <Sparkles className="w-3 h-3" />
-                  12 Carlberg Models Active
+                  12 Forecast Models Active
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -1143,16 +1143,16 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
       </div>
 
       {/* =====================================================================
-          ALL 12 CONRAD CARLBERG FORECASTING MODELS LEADERBOARD & TRAJECTORY
+          ALL 12 STATISTICAL FORECASTING MODELS LEADERBOARD & TRAJECTORY
           ===================================================================== */}
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
         <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              All 12 Conrad Carlberg Forecasting Methods (Holdout Validation Leaderboard)
+              All 12 Statistical Forecasting Methods (Holdout Validation Leaderboard)
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Every method from Conrad Carlberg&apos;s <em>Predictive Analytics: Microsoft Excel</em> (Ch. 2–10) evaluated on the unseen {Math.round(config.holdoutRatio * 100)}% chronological holdout set. Click any row to switch the active forecast.
+              12 industry-standard time-series and exponential smoothing models evaluated on the unseen {Math.round(config.holdoutRatio * 100)}% chronological holdout set. Click any row to switch the active forecast.
             </p>
           </div>
           <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 px-3 py-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
@@ -1171,8 +1171,8 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-slate-500">
-                <th className="py-2.5 px-4 font-semibold">Forecasting Method (Conrad Carlberg Book)</th>
-                <th className="py-2.5 px-3 font-semibold">Book Ref</th>
+                <th className="py-2.5 px-4 font-semibold">Forecasting Method</th>
+                <th className="py-2.5 px-3 font-semibold">Category</th>
                 <th className="py-2.5 px-3 font-semibold text-right">WMAPE %</th>
                 <th className="py-2.5 px-3 font-semibold text-right">MAPE %</th>
                 <th className="py-2.5 px-3 font-semibold text-right">RMSE (Std Err)</th>
@@ -1186,7 +1186,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
               {output.models.map((m) => {
                 const meta = ALL_12_MODEL_META[m.modelId] ?? {
                   nameEn: m.modelId,
-                  chapterTag: 'Carlberg',
+                  chapterTag: 'Statistical',
                   badgeColor: 'bg-slate-500/15 text-slate-400',
                   descEn: '',
                 };

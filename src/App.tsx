@@ -550,7 +550,7 @@ export const App: React.FC = () => {
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                12 Carlberg Forecast Models · Pure ErlangXL97 (=Agents &amp; =FractionalAgents) · Monthly &amp; Daily Cap Plan
+                12 Statistical Forecast Models · Pure ErlangXL97 (=Agents &amp; =FractionalAgents) · Monthly &amp; Daily Cap Plan
               </p>
             </div>
           </div>

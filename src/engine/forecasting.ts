@@ -169,7 +169,7 @@ function fitAndForecastWMA(
 }
 
 /**
- * Carlberg Ch. 4 Simple Exponential Smoothing:
+ * Simple Exponential Smoothing (SES):
  * F_0 = Y_0, F_t = alpha * Y_{t-1} + (1 - alpha) * F_{t-1}
  */
 function runSES(
@@ -192,7 +192,7 @@ function runSES(
 }
 
 /**
- * Carlberg Ch. 4 Holt Linear Exponential Smoothing:
+ * Holt Linear Exponential Smoothing:
  * L_0 = Y_0, b_0 = 0
  * F_t = L_{t-1} + b_{t-1}
  */
@@ -279,7 +279,7 @@ function runHoltWinters(
     return { fitted, forecast, sse, fallbackUsed: true };
   }
 
-  // Multi-cycle textbook Holt-Winters initialization (Carlberg Ch. 8 / Excel manual parity):
+  // Multi-cycle textbook Holt-Winters initialization (Excel manual parity):
   // Compute average seasonal indices across all complete seasonal cycles in the series
   const numCycles = Math.max(1, Math.floor(n / seasonLen));
   const cycleMeans: number[] = [];
@@ -459,7 +459,7 @@ function optimizeHoltWintersParams(
 }
 
 /**
- * Carlberg Ch. 3 & 7: Classical Ratio-to-Moving-Average Decomposition (CMA + Seasonal Index + Trend)
+ * Classical Ratio-to-Moving-Average Decomposition (CMA + Seasonal Index + Trend)
  */
 function runCmaDecomposition(
   series: number[],
@@ -524,7 +524,7 @@ function runCmaDecomposition(
 }
 
 /**
- * Carlberg Ch. 4: First-Differenced Simple Exponential Smoothing (Delta Y_t = Y_t - Y_{t-1})
+ * First-Differenced Simple Exponential Smoothing (Delta Y_t = Y_t - Y_{t-1})
  * Prevents SES lagging behind strong positive or negative trends.
  */
 function runDifferencedSES(
@@ -569,7 +569,7 @@ function runDifferencedSES(
 }
 
 /**
- * Carlberg Ch. 4 / Damped Trend: Holt's Damped Exponential Smoothing (alpha, gamma, phi)
+ * Damped Trend: Holt's Damped Exponential Smoothing (alpha, gamma, phi)
  */
 function runDampedHolt(
   series: number[],
@@ -606,7 +606,7 @@ function runDampedHolt(
 }
 
 /**
- * Carlberg Ch. 6: Multiple Linear Regression with Linear Trend + Seasonal Dummy Variables (m-1 indicators)
+ * Multiple Linear Regression with Linear Trend + Seasonal Dummy Variables (m-1 indicators)
  */
 function runMultipleRegressionSeasonal(
   series: number[],
@@ -676,7 +676,7 @@ function runMultipleRegressionSeasonal(
 }
 
 /**
- * Carlberg Ch. 9 & 10: Box-Jenkins Autoregressive Model AR(p) with Lag-1 and Seasonal Lag-m
+ * Box-Jenkins Autoregressive Model AR(p) with Lag-1 and Seasonal Lag-m
  */
 function runBoxJenkinsAR(
   series: number[],
@@ -697,7 +697,7 @@ function runBoxJenkinsAR(
   }
 
   const mean = series.reduce((a, b) => a + b, 0) / n;
-  // Compute Lag-1 ACF (Carlberg Ch. 9)
+  // Compute Lag-1 ACF
   let cov1 = 0;
   let var0 = 0;
   for (let t = 0; t < n; t++) {
@@ -784,7 +784,7 @@ function runBoxJenkinsAR(
 }
 
 /**
- * Runs all 12 Conrad Carlberg forecasting models with strict chronological 80/20 Holdout backtest
+ * Runs all 12 statistical forecasting models with strict chronological 80/20 Holdout backtest
  * and recalibrates winning parameters across full series for out-of-sample future horizon.
  */
 export function runForecastingStudio(
@@ -799,7 +799,7 @@ export function runForecastingStudio(
 
   const results: ForecastModelResult[] = [];
 
-  // 1. Unweighted Moving Average (SMA — Carlberg Ch. 3)
+  // 1. Unweighted Moving Average (SMA)
   let bestSmaN = config.smaWindow;
   if (config.autoOptimize && train.length >= 4) {
     let bestTrainRmse = Infinity;
@@ -826,7 +826,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 2. Weighted Moving Average (WMA — Carlberg Ch. 3)
+  // 2. Weighted Moving Average (WMA)
   const wmaWeights = normalizeWeights(config.wmaWeights.length > 0 ? config.wmaWeights : [0.15, 0.35, 0.5]);
   const wmaEval = fitAndForecastWMA(train, wmaWeights, holdLen);
   const wmaFull = fitAndForecastWMA(cleanedSeries, wmaWeights, extHorizon);
@@ -842,7 +842,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 3. Classical Ratio-to-Moving-Average Decomposition (CMA — Carlberg Ch. 3 & 7)
+  // 3. Classical Ratio-to-Moving-Average Decomposition (CMA)
   const cmaEval = runCmaDecomposition(train, m, holdLen);
   const cmaFull = runCmaDecomposition(cleanedSeries, m, extHorizon);
   results.push({
@@ -858,7 +858,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 4. Simple Exponential Smoothing (SES — Carlberg Ch. 4)
+  // 4. Simple Exponential Smoothing (SES)
   const alphaSes = config.autoOptimize ? optimizeAlphaSES(train) : config.manualAlpha;
   const sesEval = runSES(train, alphaSes, holdLen);
   const sesFull = runSES(cleanedSeries, alphaSes, extHorizon);
@@ -874,7 +874,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 5. First-Differenced Exponential Smoothing (Delta Y_t — Carlberg Ch. 4)
+  // 5. First-Differenced Exponential Smoothing (Delta Y_t)
   let bestDiffAlpha = config.manualAlpha;
   if (config.autoOptimize && train.length >= 4) {
     let bestSse = Infinity;
@@ -900,7 +900,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 6. Holt Linear Exponential Smoothing (Carlberg Ch. 4)
+  // 6. Holt Linear Exponential Smoothing
   const holtParams = config.autoOptimize
     ? optimizeHoltParams(train)
     : { alpha: config.manualAlpha, gamma: config.manualGamma };
@@ -918,7 +918,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 7. Damped-Trend Exponential Smoothing (Carlberg Ch. 4 / Damped phi)
+  // 7. Damped-Trend Exponential Smoothing (Damped phi)
   let bestPhi = 0.9;
   if (config.autoOptimize && train.length >= 4) {
     let bestDampedSse = Infinity;
@@ -944,7 +944,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 8. Holt-Winters Additive Seasonal (Carlberg Ch. 8)
+  // 8. Holt-Winters Additive Seasonal
   const hwAddParams = config.autoOptimize
     ? optimizeHoltWintersParams(train, 'additive', m)
     : { alpha: config.manualAlpha, gamma: config.manualGamma, delta: config.manualDelta };
@@ -979,7 +979,7 @@ export function runForecastingStudio(
     note: hwAddEval.fallbackUsed ? 'Seasonal index fallback (< 2 full cycles in train set)' : undefined,
   });
 
-  // 9. Holt-Winters Multiplicative Seasonal (Carlberg Ch. 8)
+  // 9. Holt-Winters Multiplicative Seasonal
   const hwMultParams = config.autoOptimize
     ? optimizeHoltWintersParams(train, 'multiplicative', m)
     : { alpha: config.manualAlpha, gamma: config.manualGamma, delta: config.manualDelta };
@@ -1014,7 +1014,7 @@ export function runForecastingStudio(
     note: hwMultEval.fallbackUsed ? 'Seasonal index fallback (< 2 full cycles in train set)' : undefined,
   });
 
-  // 10. Simple Linear Regression OLS (Carlberg Ch. 2 & 5 — TREND / LINEST)
+  // 10. Simple Linear Regression OLS (TREND / LINEST)
   const olsTrain = fitOLS(train);
   const olsHoldoutPreds: number[] = [];
   for (let h = 1; h <= holdLen; h++) {
@@ -1043,7 +1043,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 11. Multiple Linear Regression with Seasonal Dummy Indicators (Carlberg Ch. 6)
+  // 11. Multiple Linear Regression with Seasonal Dummy Indicators
   const mlrEval = runMultipleRegressionSeasonal(train, m, holdLen);
   const mlrFull = runMultipleRegressionSeasonal(cleanedSeries, m, extHorizon);
   results.push({
@@ -1064,7 +1064,7 @@ export function runForecastingStudio(
     isBest: false,
   });
 
-  // 12. Box-Jenkins Autoregressive Model AR(p) / Seasonal ARIMA (Carlberg Ch. 9 & 10)
+  // 12. Box-Jenkins Autoregressive Model AR(p) / Seasonal ARIMA
   const arEval = runBoxJenkinsAR(train, m, holdLen);
   const arFull = runBoxJenkinsAR(cleanedSeries, m, extHorizon);
   results.push({

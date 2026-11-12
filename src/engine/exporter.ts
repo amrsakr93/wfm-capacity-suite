@@ -733,7 +733,7 @@ export function exportFullSuiteWorkbook(params: {
   XLSX.utils.book_append_sheet(wb, wsAllDays, '4_All_Days_Arrival_&_SLA');
 
   // =========================================================================
-  // SHEET 5: ALL 12 CONRAD CARLBERG FORECASTING MODELS LEADERBOARD
+  // SHEET 5: ALL 12 STATISTICAL FORECASTING MODELS LEADERBOARD
   // =========================================================================
   const modelHeader = [
     'Model ID',
@@ -773,7 +773,7 @@ export function exportFullSuiteWorkbook(params: {
       h.isExcluded ? '' : h.isSmoothed ? (h.smoothedVolume ?? h.volume) : h.volume,
     ]),
   ]);
-  XLSX.utils.book_append_sheet(wb, wsModels, '5_12_Carlberg_Models');
+  XLSX.utils.book_append_sheet(wb, wsModels, '5_12_Forecast_Models');
 
   // =========================================================================
   // SHEET 6: ACTIVE TAB 2 INTERVAL STAFFING SCHEDULE
