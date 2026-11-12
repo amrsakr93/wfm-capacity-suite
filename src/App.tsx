@@ -25,6 +25,8 @@ import type {
   ParsedDataset,
 } from './engine/types.ts';
 import {
+  buildDateSpecificCurve,
+  buildDefaultByDateCurves,
   buildIntervalInputsForGranularity,
   buildSampleDailyHistory,
   DEFAULT_30M_CURVES,
@@ -108,8 +110,12 @@ export const App: React.FC = () => {
   const [dayCurves, setDayCurves] = useState<Record<DayKey, number[]>>(() => ({
     ...DEFAULT_30M_CURVES,
   }));
-  const [byDateCurves, setByDateCurves] = useState<Record<string, number[]>>({});
-  const [byDateTotals, setByDateTotals] = useState<Record<string, number>>({});
+  const [byDateCurves, setByDateCurves] = useState<Record<string, number[]>>(
+    () => buildDefaultByDateCurves(buildSampleDailyHistory(), DEFAULT_30M_CURVES).byDateCurves
+  );
+  const [byDateTotals, setByDateTotals] = useState<Record<string, number>>(
+    () => buildDefaultByDateCurves(buildSampleDailyHistory(), DEFAULT_30M_CURVES).byDateTotals
+  );
   const [operatingDaysPerMonth, setOperatingDaysPerMonth] = useState<number>(30);
 
   // Shared Monthly Volume Breakdown Context (for Cap Plan Sheet Breakdown)
@@ -268,6 +274,7 @@ export const App: React.FC = () => {
 
   // Handlers
   const handleDatasetImported = (dataset: ParsedDataset) => {
+    const nextDayCurves = dataset.dayCurves ?? dayCurves;
     if (dataset.dailySeries.length > 0) {
       setHistory(dataset.dailySeries);
       setForecastConfig((c) => ({
@@ -284,29 +291,40 @@ export const App: React.FC = () => {
     if (dataset.dayOfWeekShares) {
       setDowShares(dataset.dayOfWeekShares);
     }
-    if (dataset.byDateCurves) {
+    if (dataset.byDateCurves && Object.keys(dataset.byDateCurves).length > 0) {
       setByDateCurves(dataset.byDateCurves);
+    } else if (dataset.dailySeries.length > 0) {
+      const synth = buildDefaultByDateCurves(dataset.dailySeries, nextDayCurves);
+      setByDateCurves(synth.byDateCurves);
     }
-    if (dataset.byDateTotals) {
+    if (dataset.byDateTotals && Object.keys(dataset.byDateTotals).length > 0) {
       setByDateTotals(dataset.byDateTotals);
+    } else if (dataset.dailySeries.length > 0) {
+      const synth = buildDefaultByDateCurves(dataset.dailySeries, nextDayCurves);
+      setByDateTotals(synth.byDateTotals);
     }
     if (dataset.dayCurves) {
       setDayCurves(dataset.dayCurves);
       const g = dataset.granularityMinGuess;
-      setErlangConfig((c) => ({ ...c, granularityMin: g, selectedDateIso: null }));
-      setIntervals(
-        buildIntervalInputsForGranularity(
-          dataset.dayCurves[erlangConfig.selectedDay] ?? dataset.dayCurves.Mon,
-          g
-        )
-      );
+      const firstDateIso =
+        dataset.byDateCurves && Object.keys(dataset.byDateCurves).length > 0
+          ? Object.keys(dataset.byDateCurves).sort().slice(-1)[0]
+          : null;
+      const firstCurve =
+        (firstDateIso && dataset.byDateCurves?.[firstDateIso]) ||
+        dataset.dayCurves[erlangConfig.selectedDay] ||
+        dataset.dayCurves.Mon;
+      setErlangConfig((c) => ({ ...c, granularityMin: g, selectedDateIso: firstDateIso }));
+      setIntervals(buildIntervalInputsForGranularity(firstCurve, g));
     }
   };
 
   const handleGranularityChange = (g: IntervalGranularityMin) => {
     setErlangConfig((c) => ({ ...c, granularityMin: g }));
     const activeCurve =
-      (erlangConfig.selectedDateIso && byDateCurves[erlangConfig.selectedDateIso]) ||
+      (erlangConfig.selectedDateIso &&
+        (byDateCurves[erlangConfig.selectedDateIso] ??
+          buildDateSpecificCurve(erlangConfig.selectedDateIso, erlangConfig.selectedDay, dayCurves))) ||
       dayCurves[erlangConfig.selectedDay] ||
       dayCurves.Mon;
     setIntervals(buildIntervalInputsForGranularity(activeCurve, g));
@@ -314,6 +332,7 @@ export const App: React.FC = () => {
 
   const handleSelectDay = (d: DayKey) => {
     setErlangConfig((c) => ({ ...c, selectedDay: d, selectedDateIso: null }));
+    setIntervalScope('single_day');
     setIntervals(
       buildIntervalInputsForGranularity(
         dayCurves[d] ?? dayCurves.Mon,
@@ -323,10 +342,24 @@ export const App: React.FC = () => {
   };
 
   const handleSelectSpecificDate = (iso: string) => {
-    const jsDay = new Date(`${iso}T00:00:00Z`).getUTCDay();
-    const dk = JS_DAY_TO_KEY[jsDay] ?? 'Mon';
-    const curve = byDateCurves[iso] ?? dayCurves[dk] ?? dayCurves.Mon;
-    const vol = byDateTotals[iso] ?? erlangConfig.dailyVolume;
+    if (!iso) {
+      handleSelectDay(erlangConfig.selectedDay);
+      return;
+    }
+    const parsedMs = Date.parse(iso.length <= 10 ? `${iso}T00:00:00Z` : iso);
+    const dk: DayKey = !Number.isNaN(parsedMs)
+      ? JS_DAY_TO_KEY[new Date(parsedMs).getUTCDay()] ?? 'Mon'
+      : erlangConfig.selectedDay;
+    const isHist = historyDays.some((h) => h.dateIso === iso);
+    const curve =
+      byDateCurves[iso] ??
+      (isHist
+        ? buildDateSpecificCurve(iso, dk, dayCurves)
+        : dayCurves[dk] ?? dayCurves.Mon);
+    const histMatch = historyDays.find((h) => h.dateIso === iso);
+    const futMatch = futureDays.find((f) => f.dateIso === iso);
+    const vol =
+      byDateTotals[iso] ?? histMatch?.volume ?? futMatch?.volume ?? erlangConfig.dailyVolume;
     setErlangConfig((c) => ({
       ...c,
       dailyVolume: vol,
@@ -334,12 +367,15 @@ export const App: React.FC = () => {
       selectedDateIso: iso,
     }));
     setMonthlyVolume(vol * monthDays);
+    setIntervalScope('single_day');
     setIntervals(buildIntervalInputsForGranularity(curve, erlangConfig.granularityMin));
-    showNotice(`Loaded exact date ${iso} (${vol.toLocaleString()} calls) & arrival pattern.`);
+    showNotice(`Loaded exact date ${iso} (${dk} · ${vol.toLocaleString()} calls) & its own arrival pattern.`);
   };
 
   const handleResetCurveToDefault = () => {
     setDayCurves({ ...DEFAULT_30M_CURVES });
+    const synth = buildDefaultByDateCurves(history, DEFAULT_30M_CURVES);
+    setByDateCurves(synth.byDateCurves);
     setErlangConfig((c) => ({ ...c, selectedDateIso: null }));
     setIntervals(
       buildIntervalInputsForGranularity(
@@ -347,7 +383,7 @@ export const App: React.FC = () => {
         erlangConfig.granularityMin
       )
     );
-    showNotice('Reset intraday arrival curves to standard contact center profile.');
+    showNotice('Reset intraday arrival curves to 7-day contact center profiles.');
   };
 
   const handlePushToErlang = (
@@ -365,16 +401,22 @@ export const App: React.FC = () => {
       selectedDay: nextDay,
       selectedDateIso: dateIso ?? null,
     }));
+    const isHistDate = Boolean(dateIso && historyDays.some((h) => h.dateIso === dateIso));
     const curveToUse =
       customCurvePct ??
-      (dateIso ? byDateCurves[dateIso] : undefined) ??
+      (dateIso
+        ? byDateCurves[dateIso] ??
+          (isHistDate
+            ? buildDateSpecificCurve(dateIso, nextDay, dayCurves)
+            : dayCurves[nextDay])
+        : undefined) ??
       dayCurves[nextDay] ??
       dayCurves.Mon;
     setIntervals(buildIntervalInputsForGranularity(curveToUse, erlangConfig.granularityMin));
     setIntervalScope('single_day');
     setActiveTab('tab2');
     showNotice(
-      `Transferred ${cleanDaily.toLocaleString()} daily calls (${dateIso ?? nextDay}) to Tab 2 Erlang Planner.`
+      `Transferred ${cleanDaily.toLocaleString()} daily calls (${dateIso ? `${dateIso} · ${nextDay}` : nextDay}) & exact arrival pattern to Tab 2.`
     );
   };
 

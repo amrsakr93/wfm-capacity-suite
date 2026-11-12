@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import type { DayKey, HistoricalPoint, IntervalGranularityMin, ParsedDataset } from './types.ts';
 import { generateTimeLabels } from './erlang.ts';
+import { buildDateSpecificCurve, buildDefaultByDateCurves, DEFAULT_30M_CURVES } from './samples.ts';
 
 const DAY_KEYS: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const JS_DAY_TO_KEY: DayKey[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -146,7 +147,20 @@ function normalizeCurves(
   for (const d of DAY_KEYS) {
     const arr = accum[d];
     const sum = arr.reduce((a, b) => a + b, 0);
-    result[d] = sum > 0 ? arr.map((v) => (v / sum) * 100) : [...normalizedGlobal];
+    if (sum > 0) {
+      result[d] = arr.map((v) => (v / sum) * 100);
+    } else {
+      const def48 = DEFAULT_30M_CURVES[d];
+      if (slots === 48) {
+        result[d] = [...def48];
+      } else if (slots === 24) {
+        result[d] = Array.from({ length: 24 }, (_, i) => def48[i * 2] + def48[i * 2 + 1]);
+      } else if (slots === 96) {
+        result[d] = def48.flatMap((v) => [v / 2, v / 2]);
+      } else {
+        result[d] = [...normalizedGlobal];
+      }
+    }
   }
   return result;
 }
@@ -183,14 +197,49 @@ function parseDelimitedText(text: string): string[][] {
 }
 
 export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
-  const cleanRows = matrix.filter((r) => r.some((c) => String(c ?? '').trim() !== ''));
-  if (cleanRows.length < 2) {
+  const allCleanRows = matrix.filter((r) => r.some((c) => String(c ?? '').trim() !== ''));
+  if (allCleanRows.length < 2) {
     throw new Error('Dataset needs at least a header/label and 2 data rows.');
   }
 
+  // Scan the first up-to-5 rows to locate the true column header row
+  // (Handles Excel PivotTables where Row 1 is "Sum of Calls / Column Labels" and Row 2 has the Dates or Weekdays)
+  let headerRowIdx = -1;
+  const maxScan = Math.min(5, allCleanRows.length - 1);
+  for (let idx = 0; idx < maxScan; idx++) {
+    const candidate = allCleanRows[idx];
+    let dateCount = 0;
+    let dayCount = 0;
+    candidate.forEach((cell, cIdx) => {
+      if (cIdx > 0 && parseDateToIso(cell)) dateCount++;
+      if (cIdx > 0 && parseDayKey(cell)) dayCount++;
+    });
+    if (dateCount >= 2 || dayCount >= 5) {
+      headerRowIdx = idx;
+      break;
+    }
+  }
+  if (headerRowIdx === -1) {
+    for (let idx = 0; idx < maxScan; idx++) {
+      const candidate = allCleanRows[idx];
+      let keywordCount = 0;
+      candidate.forEach((cell) => {
+        if (/^(date|day|interval|time|slot|volume|calls|offered|forecast)$/i.test(String(cell ?? '').trim())) {
+          keywordCount++;
+        }
+      });
+      if (keywordCount >= 2) {
+        headerRowIdx = idx;
+        break;
+      }
+    }
+  }
+  if (headerRowIdx === -1) headerRowIdx = 0;
+
+  const cleanRows = allCleanRows.slice(headerRowIdx);
   const header = cleanRows[0].map((c) => c);
   const firstColHasTimes =
-    cleanRows.slice(1, Math.min(10, cleanRows.length)).filter((r) => parseTimeToMinutes(r[0]) !== null)
+    cleanRows.slice(1, Math.min(12, cleanRows.length)).filter((r) => parseTimeToMinutes(r[0]) !== null)
       .length >= 2;
 
   // Detect Format B: 48x7 / Interval x Mon..Sun Heatmap
@@ -257,8 +306,9 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       if (!pt.date) continue;
       const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
       const dk = JS_DAY_TO_KEY[jsDay];
-      byDateCurves[pt.date] = [...normCurves[dk]];
-      byDateVolumes[pt.date] = normCurves[dk].map((pct) => Number(((pt.volume * pct) / 100).toFixed(2)));
+      const dateCurve = buildDateSpecificCurve(pt.date, dk, normCurves);
+      byDateCurves[pt.date] = dateCurve;
+      byDateVolumes[pt.date] = dateCurve.map((pct) => Number(((pt.volume * pct) / 100).toFixed(2)));
       byDateTotals[pt.date] = pt.volume;
     }
 
@@ -427,12 +477,30 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
         byDateCurves[pt.date] = tot > 0 ? vols.map((v) => (v / tot) * 100) : [...normCurves[dk]];
       }
 
+      const daySumByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
+      const dayCountByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
+      for (const pt of dailySeries) {
+        if (!pt.date) continue;
+        const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
+        const dk = JS_DAY_TO_KEY[jsDay];
+        daySumByKey[dk] += pt.volume;
+        dayCountByKey[dk] += 1;
+      }
+      const avgPerDay = DAY_KEYS.map((d) =>
+        dayCountByKey[d] > 0 ? daySumByKey[d] / dayCountByKey[d] : 0
+      );
+      const avgSum = avgPerDay.reduce((a, b) => a + b, 0) || 1;
+      const dayOfWeekShares = Object.fromEntries(
+        DAY_KEYS.map((d, i) => [d, (avgPerDay[i] / avgSum) * 100])
+      ) as Record<DayKey, number>;
+
       return {
         format: 'long_interval',
         periodicityGuess: 'daily',
         dailySeries,
         granularityMinGuess: granularity,
         dayCurves: normCurves,
+        dayOfWeekShares,
         byDateCurves,
         byDateVolumes,
         byDateTotals,
@@ -481,12 +549,39 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
     else if (diffDays >= 6) periodicityGuess = 'weekly';
   }
 
+  // Build per-date curves & DOW shares when daily dates are present
+  const generated = buildDefaultByDateCurves(dailySeries, DEFAULT_30M_CURVES);
+  let dayOfWeekShares: Record<DayKey, number> | undefined;
+  if (periodicityGuess === 'daily' && dailySeries.some((d) => Boolean(d.date))) {
+    const daySumByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
+    const dayCountByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
+    for (const pt of dailySeries) {
+      if (!pt.date) continue;
+      const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
+      const dk = JS_DAY_TO_KEY[jsDay];
+      daySumByKey[dk] += pt.volume;
+      dayCountByKey[dk] += 1;
+    }
+    const avgPerDay = DAY_KEYS.map((d) =>
+      dayCountByKey[d] > 0 ? daySumByKey[d] / dayCountByKey[d] : 0
+    );
+    const avgSum = avgPerDay.reduce((a, b) => a + b, 0);
+    if (avgSum > 0) {
+      dayOfWeekShares = Object.fromEntries(
+        DAY_KEYS.map((d, i) => [d, (avgPerDay[i] / avgSum) * 100])
+      ) as Record<DayKey, number>;
+    }
+  }
+
   return {
     format: 'simple_daily',
     periodicityGuess,
     dailySeries,
     granularityMinGuess: 30,
-    byDateTotals: Object.keys(byDateTotals).length > 0 ? byDateTotals : undefined,
+    dayOfWeekShares,
+    byDateCurves:
+      Object.keys(generated.byDateCurves).length > 0 ? generated.byDateCurves : undefined,
+    byDateTotals: Object.keys(byDateTotals).length > 0 ? byDateTotals : generated.byDateTotals,
     summaryNote: `Parsed ${dailySeries.length} ${periodicityGuess} periods.`,
   };
 }
@@ -504,6 +599,23 @@ export async function parseFileDataset(file: File): Promise<ParsedDataset> {
   }
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array', cellDates: false });
+  let fallbackParsed: ParsedDataset | null = null;
+  for (const sheetName of wb.SheetNames) {
+    const sheet = wb.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
+    try {
+      const parsed = parseMatrixToDataset(matrix);
+      if (parsed.format !== 'simple_daily') {
+        return parsed;
+      }
+      if (!fallbackParsed || parsed.dailySeries.length > fallbackParsed.dailySeries.length) {
+        fallbackParsed = parsed;
+      }
+    } catch {
+      // Try next sheet
+    }
+  }
+  if (fallbackParsed) return fallbackParsed;
   const firstSheet = wb.Sheets[wb.SheetNames[0]];
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, { header: 1, defval: '' });
   return parseMatrixToDataset(matrix);

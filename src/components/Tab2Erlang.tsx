@@ -241,8 +241,6 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
     );
   };
 
-  const dateKeys = Object.keys(byDateCurves).sort();
-
   return (
     <div className="space-y-6 animate-slide-up">
       {/* Top KPI Summary Cards */}
@@ -569,7 +567,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-              Day Arrival Curve
+              Weekday Profile
             </label>
             <select
               value={config.selectedDay}
@@ -584,28 +582,39 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             </select>
           </div>
 
-          {dateKeys.length > 0 && (
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                Or Pick Specific Date
-              </label>
-              <select
-                value={config.selectedDateIso ?? ''}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val) onSelectSpecificDate(val);
-                }}
-                className="w-full rounded-xl border border-sky-500/40 bg-sky-500/5 px-3 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300"
-              >
-                <option value="">-- Weekday Average --</option>
-                {dateKeys.map((iso) => (
-                  <option key={iso} value={iso}>
-                    {iso} ({(byDateTotals[iso] ?? 0).toLocaleString()} calls)
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+              Specific Date (Historical / Forecast)
+            </label>
+            <select
+              value={config.selectedDateIso ?? ''}
+              onChange={(e) => {
+                onSelectSpecificDate(e.target.value);
+              }}
+              aria-label="Pick specific historical or forecasted date"
+              className="w-full rounded-xl border border-sky-500/40 bg-sky-500/5 px-3 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300"
+            >
+              <option value="">-- Weekday Average ({config.selectedDay}) --</option>
+              {historyDays.length > 0 && (
+                <optgroup label="Historical Dates (Exact Date Arrival Pattern)">
+                  {historyDays.map((hd) => (
+                    <option key={hd.dateIso} value={hd.dateIso}>
+                      {hd.dateIso} ({hd.dayKey}) · {(byDateTotals[hd.dateIso] ?? hd.volume).toLocaleString()} calls
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {futureDays.length > 0 && (
+                <optgroup label="Next Week Forecast (Mon → Sun)">
+                  {futureDays.slice(0, 7).map((fd) => (
+                    <option key={fd.dateIso} value={fd.dateIso}>
+                      {fd.dateIso} ({fd.dayKey}) · {fd.volume.toLocaleString()} calls (Forecast)
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </div>
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
@@ -873,6 +882,12 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
               Visualizes peak intervals, pure traffic workload (Erlangs), and resulting agent occupancy across the day.
             </p>
           </div>
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-600 dark:text-sky-400">
+            <Calendar className="w-3.5 h-3.5" />
+            {config.selectedDateIso
+              ? `Exact Date Pattern: ${config.selectedDateIso} (${config.selectedDay})`
+              : `Weekday Profile: ${config.selectedDay} Average`}
+          </span>
         </div>
 
         <div>

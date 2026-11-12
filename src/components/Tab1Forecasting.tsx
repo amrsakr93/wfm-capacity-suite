@@ -26,11 +26,10 @@ import type {
 } from '../engine/types.ts';
 import { parseFileDataset, parseTextDataset } from '../engine/parsers.ts';
 import { buildFutureHorizonSummary } from '../engine/forecasting.ts';
+import { buildDateSpecificCurve } from '../engine/samples.ts';
 import { SmartNumberInput } from './SmartNumberInput.tsx';
 import { InteractiveForecastChart, InteractiveArrivalBarChart } from './InteractiveCharts.tsx';
 import {
-  ForecastStudioIcon,
-  ErlangQueueIcon,
   CalendarHorizonIcon,
   WinnerTrophyIcon,
   ProMaxIconBadge,
@@ -247,15 +246,20 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
     if (inspectMode === 'specific_date') {
       const iso = effectiveInspectDateObj.iso;
       const dk = effectiveInspectDateObj.dayKey;
-      const curve = byDateCurves[iso] ?? dayCurves[dk] ?? dayCurves.Mon;
+      const curve =
+        byDateCurves[iso] ??
+        (!effectiveInspectDateObj.isForecast
+          ? buildDateSpecificCurve(iso, dk, dayCurves)
+          : dayCurves[dk]) ??
+        dayCurves.Mon;
       const volume = effectiveInspectDateObj.volume;
       return {
-        title: `${iso} (${dk}) ${effectiveInspectDateObj.isForecast ? '· Forecasted Day' : '· Historical Actual'}`,
+        title: `${iso} (${dk}) ${effectiveInspectDateObj.isForecast ? '· Forecasted Day' : '· Historical Actual (Exact Date Pattern)'}`,
         dateIso: iso,
         dayKey: dk,
         volume,
         curve,
-        hasExactDateCurve: Boolean(byDateCurves[iso]),
+        hasExactDateCurve: Boolean(byDateCurves[iso]) || !effectiveInspectDateObj.isForecast,
       };
     } else {
       const dk = selectedInspectDay;
@@ -403,60 +407,6 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
 
   return (
     <div className="space-y-6 animate-slide-up">
-      {/* Guided 3-Step Onboarding Strip */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bento-card-promax card-elevated rounded-2xl border border-sky-500/30 bg-gradient-to-br from-sky-500/10 via-white to-white dark:from-sky-950/50 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
-          <ProMaxIconBadge tone="cyan" size="lg" pulse>
-            <Upload className="w-5 h-5" />
-          </ProMaxIconBadge>
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider text-sky-600 dark:text-sky-400">
-              Step 1 · Auto-Ingest Data
-            </div>
-            <div className="text-xs font-semibold text-slate-900 dark:text-white mt-0.5">
-              Upload Excel/CSV or Paste Spreadsheet Table
-            </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Auto-detects dates, intervals &amp; tests all 12 Carlberg models.
-            </p>
-          </div>
-        </div>
-
-        <div className="bento-card-promax card-elevated rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-white to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
-          <ProMaxIconBadge tone="emerald" size="lg" pulse>
-            <ForecastStudioIcon size={24} />
-          </ProMaxIconBadge>
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-              Step 2 · Future Forecast Hub
-            </div>
-            <div className="text-xs font-semibold text-slate-900 dark:text-white mt-0.5">
-              Next Week (Mon → Sun) · Current Month · Next Month
-            </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Instant totals, daily splits &amp; 1-click capacity transfer.
-            </p>
-          </div>
-        </div>
-
-        <div className="bento-card-promax card-elevated rounded-2xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/10 via-white to-white dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900 p-4 flex items-center gap-3.5 shadow-xs">
-          <ProMaxIconBadge tone="violet" size="lg">
-            <ErlangQueueIcon size={24} />
-          </ProMaxIconBadge>
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-              Step 3 · Day &amp; Arrival Inspector
-            </div>
-            <div className="text-xs font-semibold text-slate-900 dark:text-white mt-0.5">
-              Pick Any Date or Weekday Profile
-            </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Inspect exact intraday arrival % &amp; staff it in Tab 2.
-            </p>
-          </div>
-        </div>
-      </div>
-
       {/* Simplified Action & Data Upload Bar (No Cryptic Statistical Jargon!) */}
       <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">

@@ -12,7 +12,12 @@ import {
 import { calculateCapacityWaterfall } from '../src/engine/capacity.ts';
 import { runForecastingStudio, fitOLS, buildFutureHorizonSummary } from '../src/engine/forecasting.ts';
 import { parseTextDataset } from '../src/engine/parsers.ts';
-import { buildSampleDailyHistory, DEFAULT_30M_CURVES, buildIntervalInputsForGranularity } from '../src/engine/samples.ts';
+import {
+  buildSampleDailyHistory,
+  DEFAULT_30M_CURVES,
+  buildIntervalInputsForGranularity,
+  buildDefaultByDateCurves,
+} from '../src/engine/samples.ts';
 import {
   handleRequestOtp,
   handleVerifyOtp,
@@ -231,6 +236,41 @@ describe('Smart Multi-Format Historical Parsers', () => {
     assert.equal(parsed.granularityMinGuess, 30);
     assert.ok(parsed.dayCurves!.Mon.length === 48);
     assert.ok(Math.abs(parsed.dayOfWeekShares!.Mon - parsed.dayOfWeekShares!.Sat * 5) < 0.2);
+    assert.ok(parsed.byDateCurves && Object.keys(parsed.byDateCurves).length > 0);
+  });
+
+  it('produces distinct arrival curves for all 7 days (Mon..Sun), per-date historical curves, and PivotTable pre-header rows', () => {
+    // 1. All 7 days of DEFAULT_30M_CURVES must be distinct (Mon != Tue != Wed != Thu, Sat != Sun)
+    assert.notEqual(DEFAULT_30M_CURVES.Mon[20], DEFAULT_30M_CURVES.Tue[20]);
+    assert.notEqual(DEFAULT_30M_CURVES.Tue[20], DEFAULT_30M_CURVES.Wed[20]);
+    assert.notEqual(DEFAULT_30M_CURVES.Wed[20], DEFAULT_30M_CURVES.Thu[20]);
+    assert.notEqual(DEFAULT_30M_CURVES.Sat[28], DEFAULT_30M_CURVES.Sun[28]);
+
+    // 2. Per-date curves for two different Mondays must be distinct and normalized to 100%
+    const sample = buildSampleDailyHistory();
+    const mon1 = sample[0].date!;
+    const mon2 = sample[7].date!;
+    const { byDateCurves: byDate } = buildDefaultByDateCurves(sample, DEFAULT_30M_CURVES);
+    assert.ok(byDate[mon1] && byDate[mon2]);
+    assert.notEqual(byDate[mon1][20], byDate[mon2][20]);
+    const sum01 = byDate[mon1].reduce((s: number, v: number) => s + v, 0);
+    assert.ok(Math.abs(sum01 - 100) < 0.05);
+
+    // 3. PivotTable with pre-header metadata row ("Sum of Calls / Column Labels") parses as crosstab_pivot with distinct byDateCurves
+    const pivotTsv = [
+      'Sum of Calls\tColumn Labels\t\t\t',
+      'Row Labels\t2026-06-01\t2026-06-02\t2026-06-03\tGrand Total',
+      '09:00\t120\t80\t60\t260',
+      '09:30\t60\t120\t140\t320',
+      'Grand Total\t180\t200\t200\t580',
+    ].join('\n');
+    const parsedPivot = parseTextDataset(pivotTsv);
+    assert.equal(parsedPivot.format, 'crosstab_pivot');
+    assert.ok(parsedPivot.byDateCurves);
+    assert.notEqual(
+      parsedPivot.byDateCurves!['2026-06-01'][18],
+      parsedPivot.byDateCurves!['2026-06-02'][18]
+    );
   });
 });
 

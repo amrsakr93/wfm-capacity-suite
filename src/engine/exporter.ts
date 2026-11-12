@@ -13,7 +13,11 @@ import type {
 } from './types.ts';
 import { buildFutureHorizonSummary } from './forecasting.ts';
 import { runErlangPlanner, solveRequiredAgents } from './erlang.ts';
-import { buildIntervalInputsForGranularity, DEFAULT_30M_CURVES } from './samples.ts';
+import {
+  buildDateSpecificCurve,
+  buildIntervalInputsForGranularity,
+  DEFAULT_30M_CURVES,
+} from './samples.ts';
 
 const JS_DAY_TO_KEY: DayKey[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -60,7 +64,9 @@ export function buildMultiDayErlangSchedules(params: {
   return days.map((d) => {
     const curve30 =
       byDateCurves[d.dateIso] ??
-      dayCurves[d.dayKey] ??
+      (d.sourceLabel === 'Historical'
+        ? buildDateSpecificCurve(d.dateIso, d.dayKey, dayCurves)
+        : dayCurves[d.dayKey]) ??
       DEFAULT_30M_CURVES[d.dayKey] ??
       DEFAULT_30M_CURVES.Mon;
     const intervalInputs: IntervalRowInput[] = buildIntervalInputsForGranularity(
