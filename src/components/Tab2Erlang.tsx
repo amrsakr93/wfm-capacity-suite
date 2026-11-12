@@ -113,6 +113,29 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [showGuardrails, setShowGuardrails] = useState(false);
   const [multiDayFilterDate, setMultiDayFilterDate] = useState<string>('ALL');
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleIntervalXlsxExport = async (
+    targetSchedules: ReturnType<typeof buildMultiDayErlangSchedules>,
+    scopeLabel: string
+  ) => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      await exportMultiDayIntervalScheduleXlsx({
+        schedules: targetSchedules,
+        erlangConfig: config,
+        scopeLabel,
+      });
+      setImportMsg(`Downloaded styled ${scopeLabel.replace(/_/g, ' ')} report (.xlsx).`);
+    } catch (err) {
+      setImportMsg(
+        `Export failed: ${err instanceof Error ? err.message : 'Unable to generate Excel report.'}`
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   // Build active multi-day horizon list based on intervalScope
   const activeHorizonDays = useMemo<HorizonDaySpec[]>(() => {
@@ -351,7 +374,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="no-print flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() =>
@@ -686,7 +709,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
         </div>
 
         {/* Secondary Toolbar: Extract Curve from File, Reset Curve, Optional Guardrails Toggle */}
-        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+        <div className="no-print mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <input
               ref={fileRef}
@@ -934,13 +957,14 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             </div>
 
             {/* Export Buttons */}
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="no-print flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                disabled={isExporting}
                 onClick={() => {
                   if (intervalScope === 'single_day') {
-                    exportMultiDayIntervalScheduleXlsx({
-                      schedules: [
+                    void handleIntervalXlsxExport(
+                      [
                         {
                           dateIso: config.selectedDateIso || `Active-${config.selectedDay}`,
                           dayKey: config.selectedDay,
@@ -949,40 +973,39 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
                           summary,
                         },
                       ],
-                      erlangConfig: config,
-                      scopeLabel: `Single_Day_${config.selectedDateIso || config.selectedDay}`,
-                    });
+                      `Single_Day_${config.selectedDateIso || config.selectedDay}`
+                    );
                   } else {
-                    exportMultiDayIntervalScheduleXlsx({
-                      schedules: filteredMultiDaySchedules,
-                      erlangConfig: config,
-                      scopeLabel:
-                        multiDayFilterDate === 'ALL'
-                          ? `Horizon_${intervalScope}_${filteredMultiDaySchedules.length}d`
-                          : `Day_${multiDayFilterDate}`,
-                    });
+                    void handleIntervalXlsxExport(
+                      filteredMultiDaySchedules,
+                      multiDayFilterDate === 'ALL'
+                        ? `Horizon_${intervalScope}_${filteredMultiDaySchedules.length}d`
+                        : `Day_${multiDayFilterDate}`
+                    );
                   }
                 }}
-                className="btn-cnx-teal inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold shadow-xs transition cursor-pointer"
+                className="btn-cnx-teal inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-60"
                 title="Download Excel (.xlsx) for the currently displayed day or view"
               >
                 <Download className="w-3.5 h-3.5" />
-                {intervalScope === 'single_day' || multiDayFilterDate !== 'ALL'
-                  ? 'Export Selected Day (.xlsx)'
-                  : `Export ${filteredMultiDaySchedules.length}d Schedule (.xlsx)`}
+                {isExporting
+                  ? 'Building Dashboard...'
+                  : intervalScope === 'single_day' || multiDayFilterDate !== 'ALL'
+                    ? 'Export Selected Day (.xlsx)'
+                    : `Export ${filteredMultiDaySchedules.length}d Schedule (.xlsx)`}
               </button>
 
               {intervalScope !== 'single_day' && multiDayFilterDate !== 'ALL' && (
                 <button
                   type="button"
+                  disabled={isExporting}
                   onClick={() =>
-                    exportMultiDayIntervalScheduleXlsx({
-                      schedules: multiDaySchedules,
-                      erlangConfig: config,
-                      scopeLabel: `Full_Horizon_${multiDaySchedules.length}d`,
-                    })
+                    void handleIntervalXlsxExport(
+                      multiDaySchedules,
+                      `Full_Horizon_${multiDaySchedules.length}d`
+                    )
                   }
-                  className="btn-cnx-primary inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold shadow-xs transition cursor-pointer"
+                  className="btn-cnx-primary inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-60"
                   title="Download Excel (.xlsx) for the entire multi-day horizon"
                 >
                   <Download className="w-3.5 h-3.5" />

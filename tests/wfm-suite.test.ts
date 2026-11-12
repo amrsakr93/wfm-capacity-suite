@@ -9,15 +9,23 @@ import {
   runErlangPlanner,
   generateTimeLabels,
 } from '../src/engine/erlang.ts';
-import { calculateCapacityWaterfall } from '../src/engine/capacity.ts';
+import { calculateCapacityWaterfall, buildWhatIfMatrix } from '../src/engine/capacity.ts';
 import { runForecastingStudio, fitOLS, buildFutureHorizonSummary } from '../src/engine/forecasting.ts';
 import { parseTextDataset } from '../src/engine/parsers.ts';
 import {
   buildSampleDailyHistory,
   DEFAULT_30M_CURVES,
+  DEFAULT_DOW_SHARES,
   buildIntervalInputsForGranularity,
   buildDefaultByDateCurves,
 } from '../src/engine/samples.ts';
+import {
+  buildFullSuiteWorkbook,
+  buildHorizonForecastWorkbook,
+  buildMultiDayIntervalScheduleWorkbook,
+  buildMultiDayErlangSchedules,
+} from '../src/engine/exporter.ts';
+import ExcelJS from 'exceljs';
 import {
   handleRequestOtp,
   handleVerifyOtp,
@@ -430,5 +438,164 @@ describe('SharePoint + Power Automate Auth Core Security', () => {
     assert.equal(futureHorizon.nextWeekDays[6].dayKey, 'Sun');
   });
 });
+
+describe('Styled Executive Dashboard Excel Exports (All 3 Workbooks)', () => {
+  const sampleHistory = buildSampleDailyHistory();
+  const fcstCfg = {
+    periodicity: 'daily' as const,
+    holdoutRatio: 0.2,
+    horizon: 14,
+    smaWindow: 7,
+    wmaWeights: [0.15, 0.25, 0.6],
+    seasonLength: 7,
+    autoOptimize: true,
+    manualModel: 'holt_winters_mult' as const,
+    manualAlpha: 0.3,
+    manualGamma: 0.1,
+    manualDelta: 0.3,
+  };
+  const fcstOut = runForecastingStudio(sampleHistory, fcstCfg);
+  const erlangCfg = {
+    dailyVolume: 2719,
+    granularityMin: 30 as const,
+    operating24x7: true,
+    startHour: 8,
+    endHour: 22,
+    globalAhtSec: 300,
+    slTargetPct: 80,
+    slThresholdSec: 30,
+    maxAsaSec: 30,
+    maxOccupancyPct: 85,
+    enforceMaxAsa: false,
+    enforceOccupancyCap: false,
+    agentMode: 'integer' as const,
+    minAgentsFloor: 0,
+    useErlangA: false,
+    avgPatienceSec: 90,
+    selectedDay: 'Mon' as const,
+    selectedDateIso: null,
+  };
+  const intervalInputs = buildIntervalInputsForGranularity(DEFAULT_30M_CURVES.Mon, 30);
+  const erlangSummary = runErlangPlanner(intervalInputs, erlangCfg);
+  const capCfg = {
+    route: 'erlang_c' as const,
+    erlangProductiveHoursPerDay: 312,
+    pureTalkHoursPerDay: 226.56,
+    flatTargetOccupancyPct: 85,
+    useShiftMinusBreak: true,
+    grossShiftHours: 9,
+    unpaidBreakHours: 1,
+    paidShiftHoursDirect: 8,
+    operatingDaysPerWeek: 7,
+    agentWorkdaysPerWeek: 5,
+    scheduleInefficiencyPct: 10,
+    inOfficeBreakdown: {
+      trainingCoachingPct: 1.5,
+      meetingsHuddlesPct: 1.0,
+      systemDowntimePct: 0.5,
+      paidBreaksPct: 0,
+    },
+    outOfOfficeBreakdown: {
+      annualLeavePct: 10,
+      sickLeavePct: 5,
+      publicHolidaysPct: 4,
+      unplannedAbsencePct: 3,
+    },
+    attritionRampBufferPct: 0,
+  };
+  const capResult = calculateCapacityWaterfall(capCfg);
+  const whatIf = buildWhatIfMatrix(intervalInputs, erlangCfg, capCfg, [-20, -10, 0, 10, 20], [-4, -2, 0, 2, 4]);
+
+  it('builds Tab 1 Future Horizon Mini-Dashboard workbook with Concentrix styles & formulas', async () => {
+    const wb = await buildHorizonForecastWorkbook({
+      history: sampleHistory,
+      forecastConfig: fcstCfg,
+      forecastOutput: fcstOut,
+      selectedModelId: fcstOut.bestModelId,
+      dowShares: DEFAULT_DOW_SHARES,
+      dayCurves: DEFAULT_30M_CURVES,
+      byDateCurves: {},
+      erlangConfig: erlangCfg,
+      focusHorizon: 'next_week',
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    const loaded = new ExcelJS.Workbook();
+    await loaded.xlsx.load(buf);
+
+    assert.deepEqual(
+      loaded.worksheets.map((w) => w.name),
+      ['1_Next_Week_Dashboard', '2_Next_Week_Intervals', '3_Current_&_Next_Month']
+    );
+    const dash = loaded.getWorksheet('1_Next_Week_Dashboard')!;
+    assert.equal(dash.views[0]?.showGridLines, false);
+    assert.equal((dash.getCell('A1').fill as ExcelJS.FillPattern).fgColor?.argb, 'FF0B2234');
+    // Check Totals SUM formula row exists below 7-day rows
+    const sumCell = Array.from({ length: 20 }, (_, i) => dash.getCell(i + 8, 3)).find(
+      (c) => typeof c.value === 'object' && c.value !== null && 'formula' in c.value
+    );
+    assert.ok(sumCell && String((sumCell.value as ExcelJS.CellFormulaValue).formula).startsWith('SUM('));
+  });
+
+  it('builds Tab 2 Multi-Day Interval Staffing Dashboard workbook cleanly', async () => {
+    const schedules = buildMultiDayErlangSchedules({
+      days: [
+        { dateIso: '2026-07-27', dayKey: 'Mon', volume: 2900, sourceLabel: 'Forecast' },
+        { dateIso: '2026-07-28', dayKey: 'Tue', volume: 2750, sourceLabel: 'Forecast' },
+      ],
+      erlangConfig: erlangCfg,
+      dayCurves: DEFAULT_30M_CURVES,
+      byDateCurves: {},
+    });
+    const wb = await buildMultiDayIntervalScheduleWorkbook({
+      schedules,
+      scopeLabel: 'Next_Week_Sample',
+      erlangConfig: erlangCfg,
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    const loaded = new ExcelJS.Workbook();
+    await loaded.xlsx.load(buf);
+
+    assert.deepEqual(
+      loaded.worksheets.map((w) => w.name),
+      ['1_Staffing_Dashboard', '2_Interval_Schedule']
+    );
+    const intervalSheet = loaded.getWorksheet('2_Interval_Schedule')!;
+    assert.equal(intervalSheet.views[0]?.state, 'frozen');
+    assert.equal(intervalSheet.getCell('A6').value, '2026-07-27');
+  });
+
+  it('builds Full 8-Sheet Executive Master Dashboard workbook with What-If styling & round-trip fidelity', async () => {
+    const wb = await buildFullSuiteWorkbook({
+      history: sampleHistory,
+      forecastConfig: fcstCfg,
+      forecastOutput: fcstOut,
+      selectedModelId: fcstOut.bestModelId,
+      dowShares: DEFAULT_DOW_SHARES,
+      dayCurves: DEFAULT_30M_CURVES,
+      byDateCurves: {},
+      byDateTotals: {},
+      erlangConfig: erlangCfg,
+      erlangSummary,
+      capacityConfig: capCfg,
+      capacityResult: capResult,
+      monthlyVolume: 81563,
+      monthDays: 30,
+      hoops: 24,
+      whatIfMatrix: whatIf,
+      shrinkageDeltas: [-4, -2, 0, 2, 4],
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    const loaded = new ExcelJS.Workbook();
+    await loaded.xlsx.load(buf);
+
+    assert.equal(loaded.worksheets.length, 8);
+    assert.equal(loaded.worksheets[0].name, '1_Executive_Dashboard');
+    const dash = loaded.getWorksheet('1_Executive_Dashboard')!;
+    assert.equal(dash.views[0]?.showGridLines, false);
+    assert.equal(dash.getCell('A6').value, 81563);
+    assert.ok(String(dash.getCell('K6').value).includes('79 Agents'));
+  });
+});
+
 
 

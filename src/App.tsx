@@ -32,10 +32,15 @@ import {
   DEFAULT_30M_CURVES,
   DEFAULT_DOW_SHARES,
 } from './engine/samples.ts';
-import { buildFutureHorizonSummary, runForecastingStudio } from './engine/forecasting.ts';
+import {
+  buildFutureHorizonSummary,
+  FORECAST_MODEL_NAMES,
+  runForecastingStudio,
+} from './engine/forecasting.ts';
 import { runErlangPlanner, solveRequiredAgents } from './engine/erlang.ts';
 import { buildWhatIfMatrix, calculateCapacityWaterfall } from './engine/capacity.ts';
 import { exportFullSuiteWorkbook, exportHorizonForecastXlsx } from './engine/exporter.ts';
+import { PrintReportHeader } from './components/PrintReportHeader.tsx';
 import { Tab1Forecasting } from './components/Tab1Forecasting.tsx';
 import { Tab2Erlang, type IntervalPlanScope, type HorizonDaySpec } from './components/Tab2Erlang.tsx';
 import { Tab3Capacity } from './components/Tab3Capacity.tsx';
@@ -438,25 +443,47 @@ export const App: React.FC = () => {
     );
   };
 
-  const handleExportHorizonForecast = (
+  const activeForecastModel = useMemo(
+    () =>
+      forecastOutput.models.find((m) => m.modelId === selectedModelId) ??
+      forecastOutput.models.find((m) => m.isBest) ??
+      forecastOutput.models[0],
+    [forecastOutput.models, selectedModelId]
+  );
+
+  const activeForecastModelLabel = useMemo(
+    () =>
+      FORECAST_MODEL_NAMES[activeForecastModel?.modelId ?? selectedModelId] ??
+      selectedModelId.toUpperCase(),
+    [activeForecastModel?.modelId, selectedModelId]
+  );
+
+  const handleExportHorizonForecast = async (
     focusHorizon: 'next_week' | 'current_month' | 'next_month' | 'all'
   ) => {
-    exportHorizonForecastXlsx({
-      history,
-      forecastConfig,
-      forecastOutput,
-      selectedModelId,
-      dowShares,
-      dayCurves,
-      byDateCurves,
-      erlangConfig,
-      focusHorizon,
-    });
-    showNotice(
-      focusHorizon === 'next_week'
-        ? 'Downloaded Next Week (Mon → Sun) Forecast & Interval Schedule (.xlsx).'
-        : 'Downloaded Future Forecast Horizons (.xlsx).'
-    );
+    try {
+      showNotice('Building styled Excel Dashboard (.xlsx)...');
+      await exportHorizonForecastXlsx({
+        history,
+        forecastConfig,
+        forecastOutput,
+        selectedModelId,
+        dowShares,
+        dayCurves,
+        byDateCurves,
+        erlangConfig,
+        focusHorizon,
+      });
+      showNotice(
+        focusHorizon === 'next_week'
+          ? 'Downloaded Next Week Executive Forecast Dashboard (.xlsx).'
+          : 'Downloaded Future Forecast Horizons Dashboard (.xlsx).'
+      );
+    } catch (err) {
+      showNotice(
+        `Export failed: ${err instanceof Error ? err.message : 'Unable to generate workbook.'}`
+      );
+    }
   };
 
   const handlePushMonthlyToSuite = (targetMonthlyVol: number, targetMonthDays: number = 30) => {
@@ -505,29 +532,36 @@ export const App: React.FC = () => {
     );
   };
 
-  const handleExportExcel = () => {
-    exportFullSuiteWorkbook({
-      history,
-      forecastConfig,
-      forecastOutput,
-      selectedModelId,
-      dowShares,
-      dayCurves,
-      byDateCurves,
-      byDateTotals,
-      monthlyVolume,
-      monthDays,
-      hoops,
-      erlangConfig,
-      erlangSummary,
-      capacityConfig,
-      capacityResult,
-      whatIfMatrix,
-      shrinkageDeltas: SHRINKAGE_DELTAS,
-    });
-    showNotice(
-      'Downloaded 7-Sheet Executive WFM Report (.xlsx) with Next Week, Monthly & All-Days Arrival + SLA!'
-    );
+  const handleExportExcel = async () => {
+    try {
+      showNotice('Building 8-Sheet Executive Dashboard Workbook (.xlsx)...');
+      await exportFullSuiteWorkbook({
+        history,
+        forecastConfig,
+        forecastOutput,
+        selectedModelId,
+        dowShares,
+        dayCurves,
+        byDateCurves,
+        byDateTotals,
+        monthlyVolume,
+        monthDays,
+        hoops,
+        erlangConfig,
+        erlangSummary,
+        capacityConfig,
+        capacityResult,
+        whatIfMatrix,
+        shrinkageDeltas: SHRINKAGE_DELTAS,
+      });
+      showNotice(
+        'Downloaded 8-Sheet Executive WFM Dashboard (.xlsx) with embedded charts & KPI cards!'
+      );
+    } catch (err) {
+      showNotice(
+        `Export failed: ${err instanceof Error ? err.message : 'Unable to generate workbook.'}`
+      );
+    }
   };
 
   return (
@@ -690,6 +724,17 @@ export const App: React.FC = () => {
 
       {/* Main Content Area (Full-Width Responsive Container) */}
       <main className="flex-1 w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 py-6">
+        <PrintReportHeader
+          activeTab={activeTab}
+          monthlyVolume={monthlyVolume}
+          monthDays={monthDays}
+          hoops={hoops}
+          selectedModelLabel={activeForecastModelLabel}
+          wmapePct={activeForecastModel?.holdoutMetrics.wmape ?? 0}
+          prodHoursPerDay={capacityConfig.erlangProductiveHoursPerDay}
+          compoundShrinkagePct={capacityResult.compoundTotalShrinkagePct}
+          finalGrossFte={capacityResult.finalGrossFte}
+        />
         {activeTab === 'tab1' && (
           <Tab1Forecasting
             history={history}

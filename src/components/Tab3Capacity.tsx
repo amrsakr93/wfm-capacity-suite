@@ -247,7 +247,7 @@ export const Tab3Capacity: React.FC<Props> = ({
             <button
               type="button"
               onClick={onExportExcel}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3.5 py-2 text-xs font-semibold shadow-xs cursor-pointer"
+              className="no-print inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3.5 py-2 text-xs font-semibold shadow-xs cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               Export .xlsx
@@ -585,7 +585,7 @@ export const Tab3Capacity: React.FC<Props> = ({
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="no-print flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={onExportExcel}

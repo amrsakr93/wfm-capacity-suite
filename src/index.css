@@ -1,5 +1,11 @@
 @import "tailwindcss";
-@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant dark {
+  &:where(.dark, .dark *) {
+    @media screen {
+      @slot;
+    }
+  }
+}
 
 :root {
   --cnx-navy-canvas: #0b1520;
@@ -75,9 +81,11 @@ html.light .cnx-btn-active {
   color: #ffffff !important;
 }
 
-html.dark .cnx-btn-active {
-  background-color: #00a3e0 !important;
-  color: #ffffff !important;
+@media screen {
+  html.dark .cnx-btn-active {
+    background-color: #00a3e0 !important;
+    color: #ffffff !important;
+  }
 }
 
 @layer base {
@@ -115,55 +123,57 @@ html.dark .cnx-btn-active {
    - Concentrix Ocean Blue (#0088C2) + Soft Teal (#14B8A6) for selective accents
    ============================================================================ */
 
-/* Night Mode Surfaces — Restful, Low-Glare Navy */
-html.dark body {
-  background-color: #0b1520 !important;
-  background-image: none !important;
-  color: #e6eef6 !important;
-}
+/* Night Mode Surfaces — Restful, Low-Glare Navy (Screen only; print always uses crisp daylight paper) */
+@media screen {
+  html.dark body {
+    background-color: #0b1520 !important;
+    background-image: none !important;
+    color: #e6eef6 !important;
+  }
 
-html.dark .bg-slate-950 {
-  background-color: #0b1520 !important;
-}
+  html.dark .bg-slate-950 {
+    background-color: #0b1520 !important;
+  }
 
-html.dark .bg-slate-950\/70,
-html.dark .bg-slate-950\/60,
-html.dark .bg-slate-950\/50 {
-  background-color: #0d1825 !important;
-}
+  html.dark .bg-slate-950\/70,
+  html.dark .bg-slate-950\/60,
+  html.dark .bg-slate-950\/50 {
+    background-color: #0d1825 !important;
+  }
 
-html.dark .bg-slate-900\/95 {
-  background-color: rgba(16, 30, 46, 0.96) !important;
-  border-color: rgba(148, 179, 204, 0.14) !important;
-}
+  html.dark .bg-slate-900\/95 {
+    background-color: rgba(16, 30, 46, 0.96) !important;
+    border-color: rgba(148, 179, 204, 0.14) !important;
+  }
 
-html.dark .bg-slate-900 {
-  background-color: #101e2e !important;
-}
+  html.dark .bg-slate-900 {
+    background-color: #101e2e !important;
+  }
 
-html.dark .bg-slate-800,
-html.dark .bg-slate-800\/90,
-html.dark .bg-slate-800\/80 {
-  background-color: #16273b !important;
-}
+  html.dark .bg-slate-800,
+  html.dark .bg-slate-800\/90,
+  html.dark .bg-slate-800\/80 {
+    background-color: #16273b !important;
+  }
 
-html.dark .border-slate-800,
-html.dark .border-slate-800\/80,
-html.dark .border-slate-800\/70,
-html.dark .border-slate-700 {
-  border-color: rgba(148, 179, 204, 0.13) !important;
-}
+  html.dark .border-slate-800,
+  html.dark .border-slate-800\/80,
+  html.dark .border-slate-800\/70,
+  html.dark .border-slate-700 {
+    border-color: rgba(148, 179, 204, 0.13) !important;
+  }
 
-/* Remove heavy card gradients so surfaces stay clean and restful */
-html.dark .from-sky-500\/10,
-html.dark .from-emerald-500\/10,
-html.dark .from-indigo-500\/10,
-html.dark .dark\:from-sky-950\/40,
-html.dark .dark\:from-emerald-950\/40,
-html.dark .dark\:from-indigo-950\/40 {
-  --tw-gradient-from: rgba(16, 30, 46, 1) !important;
-  background-image: none !important;
-  background-color: #101e2e !important;
+  /* Remove heavy card gradients so surfaces stay clean and restful */
+  html.dark .from-sky-500\/10,
+  html.dark .from-emerald-500\/10,
+  html.dark .from-indigo-500\/10,
+  html.dark .dark\:from-sky-950\/40,
+  html.dark .dark\:from-emerald-950\/40,
+  html.dark .dark\:from-indigo-950\/40 {
+    --tw-gradient-from: rgba(16, 30, 46, 1) !important;
+    background-image: none !important;
+    background-color: #101e2e !important;
+  }
 }
 
 /* Primary Buttons — Solid, Calm Concentrix Ocean Blue */
@@ -604,4 +614,137 @@ html.light .cnx-chart-tooltip {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 136, 194, 0.65);
+}
+
+/* ============================================================================
+   EXECUTIVE PRINT / PDF DASHBOARD LAYOUT
+   Forces crisp Daylight Concentrix styling even if user prints from Night Mode.
+   ============================================================================ */
+.print-only {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 9mm 10mm;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  html,
+  html.dark,
+  html.light,
+  html.dark body,
+  html.light body {
+    background-color: #ffffff !important;
+    color: #0b2234 !important;
+    --cnx-chart-bg: #f6f9fc !important;
+    --cnx-chart-border: #d5e2ee !important;
+    --cnx-chart-grid: rgba(11, 34, 52, 0.1) !important;
+    --cnx-chart-axis: #475569 !important;
+    --cnx-chart-actual: #0073a8 !important;
+    --cnx-chart-train: #64748b !important;
+    --cnx-chart-holdout: #0d826e !important;
+    --cnx-chart-future: #0d9488 !important;
+    --cnx-chart-future-text: #0f766e !important;
+    --cnx-chart-occ: #005a8d !important;
+    --cnx-chart-node-stroke: #ffffff !important;
+    --cnx-chart-horizon-bg: rgba(13, 148, 136, 0.08) !important;
+    --cnx-chart-horizon-badge: #e6f6f4 !important;
+    --cnx-bar-norm-top: #0088c2 !important;
+    --cnx-bar-norm-bot: #004f77 !important;
+    --cnx-bar-peak-top: #14b8a6 !important;
+    --cnx-bar-peak-bot: #0073a8 !important;
+    --cnx-seat-top: #0088c2 !important;
+    --cnx-seat-bot: #005a8d !important;
+    --cnx-erlang-top: #0d9488 !important;
+    --cnx-erlang-bot: #0b4f4a !important;
+  }
+
+  /* With @custom-variant dark scoped to @media screen, only paper/accent tweaks remain */
+  .from-sky-500\/10,
+  .from-emerald-500\/10,
+  .from-indigo-500\/10 {
+    background-image: none !important;
+    background-color: #ffffff !important;
+  }
+
+  .text-sky-600,
+  .text-sky-400,
+  .text-sky-300,
+  .text-indigo-600,
+  .text-indigo-400,
+  .text-indigo-300 {
+    color: #0073a8 !important;
+  }
+
+  .text-emerald-600,
+  .text-emerald-400,
+  .text-emerald-300,
+  .text-amber-600,
+  .text-amber-400,
+  .text-amber-300 {
+    color: #0d826e !important;
+  }
+
+  .cnx-btn-active {
+    background-color: #0073a8 !important;
+    color: #ffffff !important;
+  }
+
+  .cnx-chart-tooltip {
+    display: none !important;
+  }
+
+  /* Keep white ink inside explicitly dark print masthead */
+  .print-banner .bg-\[\#0B2234\],
+  .print-banner .bg-\[\#0B2234\] h1,
+  .print-banner .bg-\[\#0B2234\] .text-white {
+    background-color: #0b2234 !important;
+    color: #ffffff !important;
+  }
+
+  /* Prevent sliced cards, charts & table rows across PDF pages */
+  .bento-card-promax,
+  .card-elevated,
+  .cnx-chart-surface,
+  .print-banner,
+  table tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    box-shadow: none !important;
+  }
+
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  /* Freeze animations so bars render cleanly at full opacity/height */
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .cnx-bar-enter,
+  .cnx-svg-bar-enter,
+  .cnx-html-bar,
+  .cnx-svg-bar,
+  .cnx-waterfall-bar {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }

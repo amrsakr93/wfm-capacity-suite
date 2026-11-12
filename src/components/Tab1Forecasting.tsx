@@ -408,7 +408,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
   return (
     <div className="space-y-6 animate-slide-up">
       {/* Simplified Action & Data Upload Bar (No Cryptic Statistical Jargon!) */}
-      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
+      <div className="no-print bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="flex items-start gap-3">
             <ProMaxIconBadge tone="cyan" size="md">
@@ -684,7 +684,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                       type="button"
                       onClick={() => onExportHorizonForecast('next_week')}
                       title="Export Next Week Forecast & 7-Day Intervals (.xlsx)"
-                      className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-1 text-[10px] font-bold shadow-xs transition cursor-pointer"
+                      className="no-print inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-1 text-[10px] font-bold shadow-xs transition cursor-pointer"
                     >
                       <Download className="w-3 h-3" />
                       Export .xlsx
@@ -761,7 +761,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                 futureSummary.nextWeekDays.find((nd) => nd.dateIso === selectedInspectDate) ??
                 futureSummary.nextWeekDays[0];
               return (
-                <div className="mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800 space-y-2">
+                <div className="no-print mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800 space-y-2">
                   {/* Primary Row: Plan Selected Day Intervals OR Plan Full Week (7d) Intervals */}
                   <div className="flex items-center gap-2">
                     {chosenDay && (
@@ -899,7 +899,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
               </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800">
+            <div className="no-print mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => onPushMonthlyToSuite(futureSummary.currentMonthTotal, 30)}
@@ -981,7 +981,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
               </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800">
+            <div className="no-print mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => onPushMonthlyToSuite(futureSummary.nextMonthTotal, 30)}

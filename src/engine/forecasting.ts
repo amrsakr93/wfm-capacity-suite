@@ -3,12 +3,28 @@ import type {
   ForecastConfig,
   ForecastDayItem,
   ForecastMetrics,
+  ForecastModelId,
   ForecastModelResult,
   ForecastingStudioOutput,
   FutureHorizonSummary,
   HistoricalPoint,
   Periodicity,
 } from './types.ts';
+
+export const FORECAST_MODEL_NAMES: Record<ForecastModelId, string> = {
+  sma: '1. Unweighted Moving Average (SMA)',
+  wma: '2. Weighted Moving Average (WMA)',
+  cma_decomposition: '3. Classical CMA Seasonal Decomposition',
+  ses: '4. Simple Exponential Smoothing (SES)',
+  ses_differenced: '5. First-Differenced Exponential Smoothing (ΔY)',
+  holt: "6. Holt's Linear Exponential Smoothing",
+  holt_damped: '7. Damped-Trend Exponential Smoothing (φ)',
+  holt_winters_add: '8. Holt-Winters Additive Seasonal',
+  holt_winters_mult: '9. Holt-Winters Multiplicative Seasonal',
+  linear_regression: '10. Simple Linear Regression (OLS TREND)',
+  multiple_regression: '11. Multiple Regression (Trend + Seasonal Dummies)',
+  box_jenkins_ar: '12. Box-Jenkins Autoregressive (AR / Seasonal ARIMA)',
+};
 
 export function computeAccuracyMetrics(actuals: number[], preds: number[]): ForecastMetrics {
   const n = Math.min(actuals.length, preds.length);
