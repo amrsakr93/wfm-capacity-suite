@@ -433,19 +433,87 @@ html.light .cnx-chart-tooltip {
     background-color 180ms ease;
 }
 
+.cnx-input-tile {
+  position: relative;
+  transition:
+    transform 190ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 190ms ease,
+    box-shadow 190ms ease,
+    background-color 190ms ease;
+}
+
+.cnx-tab-card {
+  position: relative;
+  transition:
+    transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 200ms ease,
+    box-shadow 200ms ease,
+    background 200ms ease;
+}
+
 @media screen {
   html.dark .bento-card-promax,
   html.dark .card-elevated {
     box-shadow:
-      0 6px 18px -6px rgba(0, 8, 18, 0.55),
-      inset 0 1px 0 0 rgba(124, 196, 228, 0.08);
+      0 10px 26px -8px rgba(0, 5, 14, 0.82),
+      0 0 0 1px rgba(56, 189, 248, 0.14),
+      inset 0 1px 0 0 rgba(148, 226, 255, 0.14);
+  }
+
+  html.dark .cnx-input-tile {
+    background: linear-gradient(180deg, rgba(13, 33, 56, 0.92) 0%, rgba(8, 22, 38, 0.96) 100%) !important;
+    border-color: rgba(56, 189, 248, 0.28) !important;
+    box-shadow:
+      0 8px 18px -6px rgba(0, 5, 14, 0.85),
+      inset 0 1px 0 0 rgba(125, 211, 252, 0.16);
+  }
+
+  html.dark .cnx-input-tile:focus-within {
+    border-color: rgba(45, 212, 191, 0.72) !important;
+    box-shadow:
+      0 0 0 2px rgba(45, 212, 191, 0.22),
+      0 12px 24px -6px rgba(0, 136, 194, 0.35),
+      inset 0 1px 0 0 rgba(165, 243, 252, 0.22);
   }
 
   html.light .bento-card-promax,
   html.light .card-elevated {
+    border-color: #c8daeb !important;
     box-shadow:
-      0 4px 14px -4px rgba(11, 34, 52, 0.08),
-      0 1px 3px 0 rgba(11, 34, 52, 0.04) !important;
+      0 6px 18px -5px rgba(11, 34, 52, 0.10),
+      0 2px 5px 0 rgba(11, 34, 52, 0.05) !important;
+  }
+
+  html.light .cnx-input-tile {
+    background: linear-gradient(180deg, #ffffff 0%, #f7fafd 100%) !important;
+    border-color: #bfd4e8 !important;
+    box-shadow:
+      0 5px 14px -4px rgba(11, 34, 52, 0.10),
+      0 1px 3px 0 rgba(11, 34, 52, 0.06),
+      inset 0 1px 0 0 #ffffff !important;
+  }
+
+  html.light .cnx-input-tile:focus-within {
+    border-color: #0088c2 !important;
+    box-shadow:
+      0 0 0 2px rgba(0, 136, 194, 0.18),
+      0 10px 22px -6px rgba(0, 136, 194, 0.20) !important;
+  }
+
+  html.dark .cnx-tab-card {
+    background: linear-gradient(180deg, rgba(14, 34, 58, 0.85) 0%, rgba(9, 24, 42, 0.92) 100%);
+    border-color: rgba(56, 189, 248, 0.20);
+    box-shadow:
+      0 6px 14px -6px rgba(0, 4, 12, 0.72),
+      inset 0 1px 0 0 rgba(125, 211, 252, 0.12);
+  }
+
+  html.light .cnx-tab-card {
+    background: linear-gradient(180deg, #ffffff 0%, #f1f6fb 100%);
+    border-color: #c7d9ea;
+    box-shadow:
+      0 4px 10px -4px rgba(11, 34, 52, 0.09),
+      inset 0 1px 0 0 #ffffff;
   }
 
   .kpi-hero-accent::before {
@@ -453,52 +521,60 @@ html.light .cnx-chart-tooltip {
     position: absolute;
     inset-inline: 0;
     top: 0;
-    height: 2.5px;
+    height: 3px;
     background: linear-gradient(90deg, #0088c2 0%, #14b8a6 100%);
-    opacity: 0.92;
+    opacity: 0.95;
     pointer-events: none;
   }
 }
 
 @media screen and (hover: hover) and (pointer: fine) {
   html.dark .bento-card-promax:hover {
-    border-color: rgba(0, 163, 224, 0.38) !important;
+    border-color: rgba(0, 163, 224, 0.44) !important;
     box-shadow:
-      0 14px 28px -10px rgba(0, 12, 24, 0.72),
-      0 0 0 1px rgba(0, 163, 224, 0.14),
-      inset 0 1px 0 0 rgba(124, 196, 228, 0.14);
+      0 14px 30px -10px rgba(0, 10, 22, 0.82),
+      0 0 0 1px rgba(0, 163, 224, 0.18),
+      inset 0 1px 0 0 rgba(124, 196, 228, 0.18);
   }
 
   html.light .bento-card-promax:hover {
-    border-color: rgba(0, 136, 194, 0.38) !important;
+    border-color: rgba(0, 136, 194, 0.45) !important;
     box-shadow:
-      0 12px 24px -8px rgba(11, 34, 52, 0.12),
-      0 2px 6px -1px rgba(0, 136, 194, 0.12) !important;
+      0 12px 26px -8px rgba(11, 34, 52, 0.14),
+      0 2px 6px -1px rgba(0, 136, 194, 0.14) !important;
   }
 
-  html.dark .card-elevated:hover {
+  html.dark .card-elevated:hover,
+  html.dark .cnx-input-tile:hover {
     transform: translateY(-2.5px);
-    border-color: rgba(37, 226, 204, 0.44) !important;
+    border-color: rgba(37, 226, 204, 0.52) !important;
     box-shadow:
-      0 16px 30px -10px rgba(0, 10, 22, 0.78),
-      0 6px 16px -6px rgba(0, 163, 224, 0.22),
-      inset 0 1px 0 0 rgba(124, 196, 228, 0.16);
+      0 16px 32px -10px rgba(0, 10, 22, 0.88),
+      0 6px 18px -6px rgba(0, 163, 224, 0.28),
+      inset 0 1px 0 0 rgba(124, 196, 228, 0.20);
   }
 
-  html.light .card-elevated:hover {
+  html.light .card-elevated:hover,
+  html.light .cnx-input-tile:hover {
     transform: translateY(-2.5px);
-    border-color: rgba(0, 136, 194, 0.44) !important;
+    border-color: rgba(0, 136, 194, 0.52) !important;
     box-shadow:
-      0 14px 26px -8px rgba(11, 34, 52, 0.14),
-      0 4px 12px -4px rgba(0, 136, 194, 0.16) !important;
+      0 14px 28px -8px rgba(11, 34, 52, 0.15),
+      0 4px 14px -4px rgba(0, 136, 194, 0.18) !important;
+  }
+
+  .cnx-tab-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(0, 163, 224, 0.52) !important;
   }
 
   .cnx-pill-interactive:hover {
     transform: translateY(-1.5px);
-    border-color: rgba(0, 163, 224, 0.55);
+    border-color: rgba(0, 163, 224, 0.58);
   }
 
-  .cnx-pill-interactive:active {
+  .cnx-pill-interactive:active,
+  .cnx-tab-card:active {
     transform: translateY(0px) scale(0.985);
   }
 }

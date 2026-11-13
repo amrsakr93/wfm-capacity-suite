@@ -319,6 +319,8 @@ export const App: React.FC = () => {
   }));
   const [customRosterAgents, setCustomRosterAgents] = useState<ScheduledAgentRow[] | null>(null);
 
+  const shiftOverridesKey = JSON.stringify(schedRules.shiftHeadcountOverrides ?? {});
+
   useEffect(() => {
     setCustomRosterAgents(null);
   }, [
@@ -331,6 +333,7 @@ export const App: React.FC = () => {
     schedRules.allowSunMonSplitOff,
     schedRules.maxWeeklyStartDriftHours,
     schedRules.minInterShiftRestHours,
+    shiftOverridesKey,
     schedRules.breakRules.firstBreakMin,
     schedRules.breakRules.lunchMin,
     schedRules.breakRules.lastBreakMin,
@@ -742,13 +745,13 @@ export const App: React.FC = () => {
           </div>
 
           {/* Right Actions: Export, Print, Day/Night Theme Toggle */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
             <button
               type="button"
               onClick={activeTab === 'tab4' ? handleExportScheduleExcel : handleExportExcel}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-xs transition cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-xs transition cursor-pointer whitespace-nowrap"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">
                 {activeTab === 'tab4' ? 'Export Roster .xlsx' : 'Export .xlsx'}
               </span>
@@ -758,9 +761,9 @@ export const App: React.FC = () => {
               type="button"
               onClick={() => window.print()}
               title="Print or Save as PDF"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 px-2.5 py-1.5 text-xs font-medium transition cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 px-2.5 py-1.5 text-xs font-medium transition cursor-pointer whitespace-nowrap"
             >
-              <Printer className="w-3.5 h-3.5" />
+              <Printer className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden md:inline">PDF</span>
             </button>
 
@@ -768,7 +771,7 @@ export const App: React.FC = () => {
               type="button"
               onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
               aria-label="Toggle Day and Night mode"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold transition cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold transition cursor-pointer whitespace-nowrap"
             >
               {theme === 'dark' ? (
                 <>
@@ -785,71 +788,157 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* 4-Tab Navigation Bar */}
-        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 flex items-center gap-1 overflow-x-auto border-t border-slate-100 dark:border-slate-800/80">
-          <button
-            type="button"
-            onClick={() => setActiveTab('tab1')}
-            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
-              activeTab === 'tab1'
-                ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <ForecastStudioIcon size={18} />
-            1. Forecasting &amp; Horizons (Mon→Sun)
-            <span className="rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 px-1.5 py-0.5 text-[10px] font-mono">
-              12 Models
-            </span>
-          </button>
+        {/* Full-Width 4-Tab Pro Max Navigation Deck */}
+        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 py-2.5 border-t border-slate-200/80 dark:border-slate-800/80">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            <button
+              type="button"
+              onClick={() => setActiveTab('tab1')}
+              className={`cnx-tab-card rounded-xl border-2 px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left cursor-pointer ${
+                activeTab === 'tab1'
+                  ? 'border-sky-500 bg-gradient-to-r from-sky-500/15 via-sky-500/5 to-teal-500/10 shadow-md ring-1 ring-sky-400/30'
+                  : ''
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className={`promax-icon-3d w-9 h-9 rounded-xl shrink-0 ${
+                    activeTab === 'tab1' ? 'promax-badge-cyan shadow-sm' : 'bg-slate-200/60 dark:bg-slate-800/80'
+                  }`}
+                >
+                  <ForecastStudioIcon size={20} />
+                </span>
+                <div className="min-w-0">
+                  <div
+                    className={`text-xs font-extrabold truncate ${
+                      activeTab === 'tab1'
+                        ? 'text-sky-700 dark:text-sky-300'
+                        : 'text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    1. Forecast &amp; Horizons
+                  </div>
+                  <div className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">
+                    Future Week (Mon → Sun)
+                  </div>
+                </div>
+              </div>
+              <span className="shrink-0 rounded-lg border border-sky-500/35 bg-sky-500/15 text-sky-700 dark:text-sky-300 px-2 py-0.5 text-[10px] font-mono font-bold">
+                12 Models
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('tab2')}
-            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
-              activeTab === 'tab2'
-                ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <ErlangQueueIcon size={18} />
-            2. Interval &amp; Erlang C/A Planner
-            <span className="rounded-md bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono">
-              {erlangSummary.totalProductiveHours.toFixed(1)}h
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('tab2')}
+              className={`cnx-tab-card rounded-xl border-2 px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left cursor-pointer ${
+                activeTab === 'tab2'
+                  ? 'border-teal-500 bg-gradient-to-r from-teal-500/15 via-teal-500/5 to-sky-500/10 shadow-md ring-1 ring-teal-400/30'
+                  : ''
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className={`promax-icon-3d w-9 h-9 rounded-xl shrink-0 ${
+                    activeTab === 'tab2' ? 'promax-badge-emerald shadow-sm' : 'bg-slate-200/60 dark:bg-slate-800/80'
+                  }`}
+                >
+                  <ErlangQueueIcon size={20} />
+                </span>
+                <div className="min-w-0">
+                  <div
+                    className={`text-xs font-extrabold truncate ${
+                      activeTab === 'tab2'
+                        ? 'text-teal-700 dark:text-teal-300'
+                        : 'text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    2. Erlang C/A Planner
+                  </div>
+                  <div className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">
+                    Intervals &amp; =Agents Curve
+                  </div>
+                </div>
+              </div>
+              <span className="shrink-0 rounded-lg border border-teal-500/35 bg-teal-500/15 text-teal-700 dark:text-teal-300 px-2 py-0.5 text-[10px] font-mono font-bold">
+                {erlangSummary.totalProductiveHours.toFixed(1)}h
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('tab3')}
-            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
-              activeTab === 'tab3'
-                ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <CapacityWaterfallIcon size={18} />
-            3. Cap Plan &amp; Shrinkage Waterfall
-            <span className="rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 text-[10px] font-mono">
-              {Math.round(capacityResult.finalGrossFte)} Agents
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('tab3')}
+              className={`cnx-tab-card rounded-xl border-2 px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left cursor-pointer ${
+                activeTab === 'tab3'
+                  ? 'border-indigo-500 bg-gradient-to-r from-indigo-500/15 via-indigo-500/5 to-sky-500/10 shadow-md ring-1 ring-indigo-400/30'
+                  : ''
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className={`promax-icon-3d w-9 h-9 rounded-xl shrink-0 ${
+                    activeTab === 'tab3' ? 'promax-badge-violet shadow-sm' : 'bg-slate-200/60 dark:bg-slate-800/80'
+                  }`}
+                >
+                  <CapacityWaterfallIcon size={20} />
+                </span>
+                <div className="min-w-0">
+                  <div
+                    className={`text-xs font-extrabold truncate ${
+                      activeTab === 'tab3'
+                        ? 'text-indigo-700 dark:text-indigo-300'
+                        : 'text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    3. Cap Plan Waterfall
+                  </div>
+                  <div className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">
+                    Shrinkage &amp; Net FTE Target
+                  </div>
+                </div>
+              </div>
+              <span className="shrink-0 rounded-lg border border-emerald-500/35 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 text-[10px] font-mono font-bold">
+                {Math.round(capacityResult.finalGrossFte)} FTE
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('tab4')}
-            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
-              activeTab === 'tab4'
-                ? 'border-amber-500 text-amber-600 dark:text-amber-400 bg-amber-500/5'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-            }`}
-          >
-            <ShiftSchedulerIcon size={18} />
-            4. Shift &amp; Break Roster Studio
-            <span className="rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 text-[10px] font-mono">
-              {scheduleResult.summary.activeSchedulableCount} Active · {scheduleResult.summary.avgCoveragePct.toFixed(0)}% Cov
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('tab4')}
+              className={`cnx-tab-card rounded-xl border-2 px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left cursor-pointer ${
+                activeTab === 'tab4'
+                  ? 'border-amber-500 bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-teal-500/10 shadow-md ring-1 ring-amber-400/35'
+                  : ''
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className={`promax-icon-3d w-9 h-9 rounded-xl shrink-0 ${
+                    activeTab === 'tab4' ? 'promax-badge-amber shadow-sm' : 'bg-slate-200/60 dark:bg-slate-800/80'
+                  }`}
+                >
+                  <ShiftSchedulerIcon size={20} />
+                </span>
+                <div className="min-w-0">
+                  <div
+                    className={`text-xs font-extrabold truncate ${
+                      activeTab === 'tab4'
+                        ? 'text-amber-700 dark:text-amber-300'
+                        : 'text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    4. Shift &amp; Break Roster
+                  </div>
+                  <div className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">
+                    Leaves, Shifts &amp; 15/30/15
+                  </div>
+                </div>
+              </div>
+              <span className="shrink-0 rounded-lg border border-amber-500/35 bg-amber-500/15 text-amber-700 dark:text-amber-300 px-2 py-0.5 text-[10px] font-mono font-bold">
+                {scheduleResult.summary.activeSchedulableCount} Act · {scheduleResult.summary.avgCoveragePct.toFixed(0)}%
+              </span>
+            </button>
+          </div>
         </div>
       </header>
 

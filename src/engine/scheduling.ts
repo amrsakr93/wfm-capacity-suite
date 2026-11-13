@@ -16,6 +16,7 @@ import type {
   ScheduleGenerationResult,
   ScheduledAgentRow,
   SchedulingRules,
+  ShiftDailyMixRow,
   ShiftTemplate,
 } from './types.ts';
 import { computeErlangCMetrics, generateTimeLabels, runErlangPlanner } from './erlang.ts';
@@ -50,9 +51,17 @@ export const DEFAULT_SCHEDULING_RULES: SchedulingRules = {
   allowSunMonSplitOff: true, // Mon & Sun split OFF permitted
   maxWeeklyStartDriftHours: 2, // Allows 08+09 or 10+12; blocks 15->08 clopening jumps
   minInterShiftRestHours: 12, // Enforces >= 12h sleep/rest between shifts
-  annualVisibilityInOutput: 'exclude', // AL treated as Input exclusion from output by default
+  annualVisibilityInOutput: 'show_muted', // AL shown full-week inside roster table like other leaves (0% cov)
+  shiftHeadcountOverrides: {},
   breakRules: { ...DEFAULT_BREAK_RULES },
 };
+
+/**
+ * Sorts shift templates chronologically across the 24-hour operational day (00:00 -> 23:45).
+ */
+export function sortShiftCatalogChronologically(shifts: ShiftTemplate[]): ShiftTemplate[] {
+  return [...shifts].sort((a, b) => a.startMin - b.startMin || a.durationMin - b.durationMin);
+}
 
 export function formatMinutesHHMM(totalMin: number): string {
   const m = ((Math.round(totalMin) % 1440) + 1440) % 1440;
@@ -155,7 +164,7 @@ export function parseShiftCatalogText(
       }
     }
   }
-  return parsed;
+  return sortShiftCatalogChronologically(parsed);
 }
 
 export async function parseShiftCatalogFile(
@@ -676,17 +685,33 @@ export function recalculateScheduleCoverage(params: {
   const break15: number[][] = Array.from({ length: 7 }, () => new Array(96).fill(0));
 
   const auditedAgents = agents.map((a) => validateAgentScheduleRow(a, shiftCatalog, rules));
+  const sortedCatalog = sortShiftCatalogChronologically(shiftCatalog);
 
   let totalWorkShifts = 0;
   let validBreaksCount = 0;
 
+  // Track Per-Shift x Per-Day scheduled counts and distinct agent primary-shift pools
+  const shiftDayCounts = new Map<string, Record<DayKey, number>>();
+  const primaryPoolCountByShift = new Map<string, number>();
+  const ensureShiftTrack = (shId: string) => {
+    if (!shiftDayCounts.has(shId)) {
+      shiftDayCounts.set(shId, { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 });
+    }
+  };
+  for (const sh of sortedCatalog) ensureShiftTrack(sh.id);
+
   for (const agent of auditedAgents) {
+    const freqThisAgent = new Map<string, number>();
     for (let dIdx = 0; dIdx < 7; dIdx++) {
-      const assign = agent.assignments[WEEK_DAYS[dIdx]];
+      const dk = WEEK_DAYS[dIdx];
+      const assign = agent.assignments[dk];
       if (!assign || assign.status !== 'WORK' || !assign.shiftId) continue;
       const shift = shiftMap.get(assign.shiftId);
       if (!shift) continue;
       totalWorkShifts++;
+      ensureShiftTrack(shift.id);
+      shiftDayCounts.get(shift.id)![dk] += 1;
+      freqThisAgent.set(shift.id, (freqThisAgent.get(shift.id) ?? 0) + 1);
 
       const covered = getShiftSlotsForDay(shift, dIdx);
       for (const pos of covered) {
@@ -696,6 +721,17 @@ export function recalculateScheduleCoverage(params: {
         if (assign.breaks.isValid) validBreaksCount++;
         applyBreaksToArray15(break15, shift, dIdx, assign.breaks, rules.breakRules, 1);
       }
+    }
+    if (freqThisAgent.size > 0) {
+      let bestPrimary = [...freqThisAgent.entries()][0][0];
+      let bestFreq = -1;
+      for (const [shId, cnt] of freqThisAgent.entries()) {
+        if (cnt > bestFreq) {
+          bestFreq = cnt;
+          bestPrimary = shId;
+        }
+      }
+      primaryPoolCountByShift.set(bestPrimary, (primaryPoolCountByShift.get(bestPrimary) ?? 0) + 1);
     }
   }
 
@@ -830,11 +866,50 @@ export function recalculateScheduleCoverage(params: {
   const avgCoveragePct =
     totalReqProdHours > 0 ? Number(((totalSchedNetHours / totalReqProdHours) * 100).toFixed(1)) : 100;
 
+  const overrides = rules.shiftHeadcountOverrides ?? {};
+  const shiftDailyMix: ShiftDailyMixRow[] = sortedCatalog
+    .filter((sh) => {
+      const counts = shiftDayCounts.get(sh.id);
+      const totalForSh = counts ? WEEK_DAYS.reduce((s, dk) => s + counts[dk], 0) : 0;
+      const hasOv = overrides[sh.id] !== undefined && overrides[sh.id] !== null;
+      return sh.enabled || totalForSh > 0 || hasOv;
+    })
+    .map((sh) => {
+      const byDay = shiftDayCounts.get(sh.id) ?? {
+        Mon: 0,
+        Tue: 0,
+        Wed: 0,
+        Thu: 0,
+        Fri: 0,
+        Sat: 0,
+        Sun: 0,
+      };
+      const totalWeeklyShifts = WEEK_DAYS.reduce((s, dk) => s + byDay[dk], 0);
+      const ovVal = overrides[sh.id];
+      return {
+        shiftId: sh.id,
+        shiftLabel: sh.label,
+        wrapsMidnight: sh.wrapsMidnight,
+        durationHours: Number((sh.durationMin / 60).toFixed(1)),
+        targetOverride:
+          ovVal !== undefined && ovVal !== null && Number.isFinite(ovVal)
+            ? Math.max(0, Math.round(ovVal))
+            : null,
+        assignedPoolCount: primaryPoolCountByShift.get(sh.id) ?? 0,
+        avgPerDay: Number((totalWeeklyShifts / 7).toFixed(1)),
+        byDay,
+        totalWeeklyShifts,
+        shareOfShiftsPct:
+          totalWorkShifts > 0 ? Number(((totalWeeklyShifts / totalWorkShifts) * 100).toFixed(1)) : 0,
+      };
+    });
+
   return {
     agents: auditedAgents,
     visibleOutputAgents,
     coverageByDay,
     dailyTotals,
+    shiftDailyMix,
     summary: {
       totalRosterInput: auditedAgents.length,
       annualExcluded,
@@ -887,8 +962,11 @@ export function generateWeeklySchedule(params: {
   } = params;
 
   const activeCatalog = shiftCatalog.filter((s) => s.enabled);
-  const catalogToUse = activeCatalog.length > 0 ? activeCatalog : DEFAULT_SHIFT_CATALOG;
+  const catalogToUse = sortShiftCatalogChronologically(
+    activeCatalog.length > 0 ? activeCatalog : DEFAULT_SHIFT_CATALOG
+  );
   const shiftMap = new Map(catalogToUse.map((s) => [s.id, s]));
+  const overrides = rules.shiftHeadcountOverrides ?? {};
 
   // 1. Build base agent list from mode
   const rawRoster: { id: string; name: string; source: 'manual_count' | 'uploaded_name'; lockedException: ExceptionCode | null }[] = [];
@@ -1076,44 +1154,87 @@ export function generateWeeklySchedule(params: {
     return true;
   };
 
-  // Scale deficit check with break allowance (expected net availability per slot ~ 1 - 60/shiftDuration)
-  const scoreShiftDelta = (candidate: ShiftTemplate, dayIdx: number, sign: 1 | -1): number => {
+  // Marginal WFM Shift Scoring: rewards unfilled Erlang demand & heavily penalizes quiet/overnight idle excess
+  const scoreShiftDelta = (candidate: ShiftTemplate, dayIdx: number): number => {
     const slots = getShiftSlotsForDay(candidate, dayIdx);
-    let score = 0;
     const netWeight = Math.max(0.75, (candidate.durationMin - 60) / candidate.durationMin);
+    let score = 0;
     for (const pos of slots) {
       const req = req15[pos.dayIdx][pos.qIdx];
-      const currNetApprox = gross15[pos.dayIdx][pos.qIdx] * netWeight;
-      if (sign === 1) {
-        const needBefore = req - currNetApprox;
-        if (needBefore > 0) {
-          score += Math.min(netWeight, needBefore) * 14;
-        } else {
-          // Slight penalty for overstaffing surplus slots
-          score -= Math.abs(needBefore) * 0.45 + 0.8;
-        }
+      const currGross = gross15[pos.dayIdx][pos.qIdx];
+      // For ultra-low-volume overnight intervals (req <= 2), 1 agent absorbs minor call volume without doubling staff for break fractions
+      const targetGross = req <= 2 ? req : req / netWeight;
+      if (currGross < targetGross) {
+        const fill = Math.min(1, targetGross - currGross);
+        const shortageUrgency = (targetGross - currGross) / Math.max(1, targetGross);
+        score += fill * (14 + 6 * Math.min(1, shortageUrgency));
+      } else {
+        const excessBefore = currGross - targetGross;
+        // Scale waste penalty inversely by slot demand so overnight 1-seat intervals never hoard idle heads
+        const ratioWaste = (excessBefore + 1) / Math.max(0.8, targetGross);
+        const quietExtra = req <= 2 ? 5.2 + 3.0 * excessBefore : 1.35;
+        score -= quietExtra + ratioWaste * (req <= 2 ? 4.5 : 1.6);
       }
     }
     return score;
   };
 
-  // 4. Greedy Demand Water-Filling Shift Placement across Active Agents
-  // Order working days heaviest first so peak days stake shifts and subsequent days align within drift band
+  // 4A. Honor Explicit Per-Shift Manual Pool Overrides First (e.g. pin "22:00-07:00": 2 Agents)
+  const pinnedRosterIndices = new Set<number>();
+  const autoAllowedShifts = catalogToUse.filter((sh) => {
+    const ov = overrides[sh.id];
+    return ov === undefined || ov === null;
+  });
+
+  // Order remaining agents for pinning cleanly across distributed OFF pairs so pinned shifts span Mon..Sun evenly
+  let pinCursor = 0;
+  for (const sh of catalogToUse) {
+    const rawOv = overrides[sh.id];
+    if (rawOv === undefined || rawOv === null) continue;
+    const pinTarget = Math.max(0, Math.round(rawOv));
+    let assignedHere = 0;
+    while (assignedHere < pinTarget && pinCursor < activeIndices.length) {
+      const rosterIdx = activeIndices[pinCursor++];
+      pinnedRosterIndices.add(rosterIdx);
+      const row = draftRows[rosterIdx];
+      for (let dIdx = 0; dIdx < 7; dIdx++) {
+        const dk = WEEK_DAYS[dIdx];
+        if (row.assignments[dk].status !== 'WORK') continue;
+        row.assignments[dk].shiftId = sh.id;
+        for (const pos of getShiftSlotsForDay(sh, dIdx)) {
+          gross15[pos.dayIdx][pos.qIdx] += 1;
+        }
+      }
+      assignedHere++;
+    }
+  }
+
+  // Fallback shift pool for auto agents: prefer unpinned active shifts; if user pinned every shift below headcount, spread overflow across non-zero shifts
+  const nonZeroCatalog = catalogToUse.filter((sh) => overrides[sh.id] !== 0);
+  const autoCandidates =
+    autoAllowedShifts.length > 0
+      ? autoAllowedShifts
+      : nonZeroCatalog.length > 0
+        ? nonZeroCatalog
+        : catalogToUse;
+
+  // 4B. Demand-Proportional Greedy Water-Filling across Unpinned Active Agents
   const sortedDayIndices = [0, 1, 2, 3, 4, 5, 6].sort(
     (a, b) => profiles[WEEK_DAYS[b]].forecastVolume - profiles[WEEK_DAYS[a]].forecastVolume
   );
 
   for (const rosterIdx of activeIndices) {
+    if (pinnedRosterIndices.has(rosterIdx)) continue;
     const row = draftRows[rosterIdx];
     for (const dIdx of sortedDayIndices) {
       const dk = WEEK_DAYS[dIdx];
       if (row.assignments[dk].status !== 'WORK') continue;
 
-      let bestShift = catalogToUse[0];
+      let bestShift = autoCandidates[0];
       let bestScore = -Infinity;
-      for (const candidate of catalogToUse) {
+      for (const candidate of autoCandidates) {
         if (!isCandidateShiftFeasible(row, dIdx, candidate)) continue;
-        const sc = scoreShiftDelta(candidate, dIdx, 1);
+        const sc = scoreShiftDelta(candidate, dIdx);
         if (sc > bestScore) {
           bestScore = sc;
           bestShift = candidate;
@@ -1127,15 +1248,20 @@ export function generateWeeklySchedule(params: {
     }
   }
 
-  // 5. Local Optimization Swap Pass (2 sweeps: re-pick shift if moving improves squared understaffing)
+  // 5. Local Optimization Swap Pass (2 sweeps: proportional deficit/waste balance, preserving manual shift pins)
   const objectiveError = () => {
     let err = 0;
     for (let d = 0; d < 7; d++) {
       for (let q = 0; q < 96; q++) {
-        const netApprox = gross15[d][q] * 0.889; // ~8/9 effective presence
-        const diff = req15[d][q] - netApprox;
-        if (diff > 0) err += diff * diff * 4.0;
-        else err += Math.abs(diff) * 0.35;
+        const req = req15[d][q];
+        const targetG = req <= 2 ? req : req / 0.889;
+        const diff = targetG - gross15[d][q];
+        if (diff > 0) {
+          err += diff * diff * 5.0;
+        } else {
+          const ex = -diff;
+          err += ex * (1.2 + 5.2 / Math.max(0.8, req)) + ex * ex * (req <= 2 ? 3.5 : 0.18);
+        }
       }
     }
     return err;
@@ -1144,6 +1270,7 @@ export function generateWeeklySchedule(params: {
   for (let pass = 0; pass < 2; pass++) {
     let improved = false;
     for (const rosterIdx of activeIndices) {
+      if (pinnedRosterIndices.has(rosterIdx)) continue;
       const row = draftRows[rosterIdx];
       for (let dIdx = 0; dIdx < 7; dIdx++) {
         const dk = WEEK_DAYS[dIdx];
@@ -1155,10 +1282,9 @@ export function generateWeeklySchedule(params: {
         let bestShift = currShift;
         let bestErr = objectiveError();
 
-        // Remove current temporarily
         for (const pos of getShiftSlotsForDay(currShift, dIdx)) gross15[pos.dayIdx][pos.qIdx] -= 1;
 
-        for (const cand of catalogToUse) {
+        for (const cand of autoCandidates) {
           if (cand.id === currShift.id) continue;
           if (!isCandidateShiftFeasible(row, dIdx, cand)) continue;
           for (const pos of getShiftSlotsForDay(cand, dIdx)) gross15[pos.dayIdx][pos.qIdx] += 1;

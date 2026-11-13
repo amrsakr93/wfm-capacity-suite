@@ -1873,7 +1873,7 @@ export async function buildSchedulingWorkbook(params: {
     9,
     1,
     rCols,
-    `1. AGENT ROSTER MATRIX (${visibleOutputAgents.length} DISPLAYED${rules.annualVisibilityInOutput === 'exclude' && summary.annualExcluded > 0 ? ` · ${summary.annualExcluded} ANNUAL LEAVE INPUTS EXCLUDED FROM OUTPUT` : ''})`,
+    `1. AGENT ROSTER MATRIX (${visibleOutputAgents.length} DISPLAYED${rules.annualVisibilityInOutput === 'exclude' && summary.annualExcluded > 0 ? ` · ${summary.annualExcluded} ANNUAL LEAVE EXCLUDED` : summary.annualExcluded > 0 ? ` · INCLUDES ${summary.annualExcluded} FULL-WEEK AL LOCKS` : ''})`,
     CNX.NAVY_DARK
   );
 
@@ -1995,12 +1995,103 @@ export async function buildSchedulingWorkbook(params: {
     covRowCursor = 21;
   }
 
-  const dSecRow = renderSectionHeading(
+  const shiftMixSecRow = renderSectionHeading(
     wsCov,
     covRowCursor,
     1,
     cCols,
-    '1. MON → SUN WEEKLY FORECAST VS SCHEDULED COVERAGE SUMMARY',
+    '1. SCHEDULED HEADCOUNT PER SHIFT × PER DAY (MON → SUN)',
+    CNX.NAVY_DARK
+  );
+  const shiftMixRows = scheduleResult.shiftDailyMix;
+  const activeWorkingByDay = WEEK_DAYS.map((dk) =>
+    shiftMixRows.reduce((s, r) => s + r.byDay[dk], 0)
+  );
+  const dailyOffCounts = WEEK_DAYS.map((dk) =>
+    scheduleResult.agents.filter(
+      (a) => !a.preAllocatedException && a.assignments[dk]?.status === 'OFF'
+    ).length
+  );
+  const fullWeekLeaveHeads = scheduleResult.agents.filter((a) => !!a.preAllocatedException).length;
+
+  const shiftMatrixTableRows = [
+    ...shiftMixRows.map((m) => [
+      m.shiftLabel,
+      m.targetOverride !== null ? `Manual (${m.targetOverride})` : `Auto (${m.assignedPoolCount})`,
+      m.byDay.Mon,
+      m.byDay.Tue,
+      m.byDay.Wed,
+      m.byDay.Thu,
+      m.byDay.Fri,
+      m.byDay.Sat,
+      m.byDay.Sun,
+      m.totalWeeklyShifts,
+      m.shareOfShiftsPct,
+    ]),
+    [
+      'TOTAL ACTIVE WORKING',
+      `${summary.activeSchedulableCount} Pool`,
+      ...activeWorkingByDay,
+      summary.totalWorkShifts,
+      100,
+    ],
+    [
+      'Scheduled Day OFFs',
+      '2 OFF / wk',
+      ...dailyOffCounts,
+      dailyOffCounts.reduce((a, b) => a + b, 0),
+      0,
+    ],
+    [
+      'Full-Week Leaves (AL/MAT/RES/TERM/UPL/PAT)',
+      '0% Cov',
+      ...WEEK_DAYS.map(() => fullWeekLeaveHeads),
+      fullWeekLeaveHeads * 7,
+      0,
+    ],
+  ];
+
+  const shiftMixTbl = renderStyledTable({
+    ws: wsCov,
+    startRow: shiftMixSecRow,
+    columns: [
+      { header: 'Shift Window', align: 'left', minWidth: 18 },
+      { header: 'Pool / Mode', align: 'center', minWidth: 15 },
+      ...WEEK_DAYS.map((dk) => ({ header: dk, align: 'center' as const, minWidth: 10, numFmt: '#,##0' })),
+      { header: 'Weekly Shifts', align: 'right', minWidth: 14, numFmt: '#,##0' },
+      { header: 'Share %', align: 'right', minWidth: 12, numFmt: '0.0"%"' },
+    ],
+    rows: shiftMatrixTableRows,
+    showGridLines: false,
+    onCell: (cell, val, _r, rIdx, cIdx) => {
+      const isTotalRow = rIdx >= shiftMixRows.length;
+      if (isTotalRow) {
+        cell.font = {
+          name: EXCEL_FONT,
+          size: 9.5,
+          bold: true,
+          color: { argb: rIdx === shiftMixRows.length ? CNX.NAVY_DARK : CNX.NAVY_BRAND },
+        };
+        if (rIdx === shiftMixRows.length) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CNX.BLUE_TINT } };
+        }
+        return;
+      }
+      if (cIdx === 1) {
+        stylePillCell(cell, String(val ?? '').startsWith('Manual') ? 'warn' : 'info', true);
+      } else if (cIdx >= 2 && cIdx <= 8) {
+        const n = Number(val ?? 0);
+        if (n > 0) stylePillCell(cell, 'teal', true);
+      }
+    },
+  });
+
+  const dSecRow = renderSectionHeading(
+    wsCov,
+    shiftMixTbl.endRow + 2,
+    1,
+    cCols,
+    '2. MON → SUN WEEKLY FORECAST VS SCHEDULED COVERAGE SUMMARY',
     CNX.NAVY_BRAND
   );
   const dailyTbl = renderStyledTable({
@@ -2052,7 +2143,7 @@ export async function buildSchedulingWorkbook(params: {
     dailyTbl.endRow + 2,
     1,
     cCols,
-    '2. FULL INTRADAY INTERVAL COVERAGE TELEMETRY (GROSS VS BREAK DEDUCTION VS NET FTE)',
+    '3. FULL INTRADAY INTERVAL COVERAGE TELEMETRY (GROSS VS BREAK DEDUCTION VS NET FTE)',
     CNX.NAVY_DARK
   );
   const allIntervalRows = WEEK_DAYS.flatMap((dk) =>
@@ -2141,7 +2232,7 @@ export async function buildSchedulingWorkbook(params: {
       EXCEPTION_META[code].label,
       exCounts[code] ?? 0,
       code === 'AL'
-        ? `Input-only deduction (${rules.annualVisibilityInOutput === 'exclude' ? 'Excluded from output roster' : 'Shown muted'}) · 0 interval coverage`
+        ? `Locked full week (${rules.annualVisibilityInOutput === 'exclude' ? 'Hidden from output view' : 'Shown in roster table'}) · 0 interval coverage`
         : 'Locked full week (Mon → Sun) across same status code · 0 interval coverage',
     ]),
     showGridLines: false,

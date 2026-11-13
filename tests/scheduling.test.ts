@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_SHIFT_CATALOG,
   DEFAULT_SCHEDULING_RULES,
+  sortShiftCatalogChronologically,
   parseShiftCatalogText,
   parseAgentRosterText,
   computeCircularStartSpanHours,
@@ -77,6 +78,11 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
     ].join('\n');
     const shifts = parseShiftCatalogText(raw);
     assert.equal(shifts.length, 5);
+    // Chronologically auto-sorted (08:00 -> 09:00 -> 10:00 -> 15:00 -> 22:00)
+    assert.deepEqual(
+      shifts.map((s) => s.id),
+      ['08:00-17:00', '09:00-18:00', '10:00-19:00', '15:00-00:00', '22:00-07:00']
+    );
     assert.equal(shifts[0].startMin, 480);
     assert.equal(shifts[0].durationMin, 540);
     assert.equal(shifts[0].wrapsMidnight, false);
@@ -85,14 +91,14 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
     assert.equal(shifts[1].durationMin, 540);
 
     // 15:00 -> 00:00 is 9h finishing at midnight
-    assert.equal(shifts[2].startMin, 900);
-    assert.equal(shifts[2].durationMin, 540);
+    assert.equal(shifts[3].startMin, 900);
+    assert.equal(shifts[3].durationMin, 540);
 
     // Overnight 22:00 -> 07:00 wraps past midnight cleanly
-    assert.equal(shifts[3].startMin, 1320);
-    assert.equal(shifts[3].durationMin, 540);
-    assert.equal(shifts[3].wrapsMidnight, true);
-    assert.equal(shifts[3].endMinOfDay, 420);
+    assert.equal(shifts[4].startMin, 1320);
+    assert.equal(shifts[4].durationMin, 540);
+    assert.equal(shifts[4].wrapsMidnight, true);
+    assert.equal(shifts[4].endMinOfDay, 420);
   });
 
   it('parses uploaded/pasted agent names & recognizes optional exception columns', () => {
@@ -146,20 +152,38 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
       erlangConfig: DEFAULT_ERLANG,
     });
 
-    // Total input = 50; 5 AL (input-excluded) + 6 non-AL exceptions -> 39 active schedulable
+    // Total input = 50; 5 AL + 6 non-AL exceptions -> 39 active schedulable
     assert.equal(result.summary.totalRosterInput, 50);
     assert.equal(result.summary.annualExcluded, 5);
     assert.equal(result.summary.fullWeekExceptionsCount, 6);
     assert.equal(result.summary.activeSchedulableCount, 39);
 
-    // Output table omits AL rows when annualVisibilityInOutput === 'exclude' (50 - 5 = 45 visible)
-    assert.equal(result.visibleOutputAgents.length, 45);
+    // By default, AL agents appear locked full-week in output table just like other leaves (50 total rows)
+    assert.equal(result.visibleOutputAgents.length, 50);
     assert.equal(
       result.visibleOutputAgents.filter((a) => a.preAllocatedException === 'AL').length,
+      5
+    );
+
+    // Optional exclude toggle hides AL rows cleanly while preserving active pool math
+    const excludedView = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 50,
+      namedAgents: [],
+      leaveCounts,
+      shiftCatalog: DEFAULT_SHIFT_CATALOG,
+      rules: { ...DEFAULT_SCHEDULING_RULES, annualVisibilityInOutput: 'exclude' },
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+    assert.equal(excludedView.visibleOutputAgents.length, 45);
+    assert.equal(
+      excludedView.visibleOutputAgents.filter((a) => a.preAllocatedException === 'AL').length,
       0
     );
 
-    // Exceptions keep exact same code on all 7 days
+    // Exceptions keep exact same code on all 7 days (both MAT and AL)
     const days: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const matAgents = result.visibleOutputAgents.filter((a) => a.preAllocatedException === 'MAT');
     assert.equal(matAgents.length, 2);
@@ -167,6 +191,14 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
       for (const dk of days) {
         assert.equal(m.assignments[dk].status, 'MAT');
         assert.equal(m.assignments[dk].shiftId, null);
+      }
+    }
+    const alAgents = result.visibleOutputAgents.filter((a) => a.preAllocatedException === 'AL');
+    assert.equal(alAgents.length, 5);
+    for (const al of alAgents) {
+      for (const dk of days) {
+        assert.equal(al.assignments[dk].status, 'AL');
+        assert.equal(al.assignments[dk].shiftId, null);
       }
     }
 
@@ -300,6 +332,83 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
       erlangConfig: DEFAULT_ERLANG,
     });
     assert.ok(updated.summary.violationAgentsCount >= 1);
+  });
+
+  it('does not over-allocate overnight shifts when overnight calls are tiny (1-2 calls) vs daytime peak', () => {
+    const withOvernight = parseShiftCatalogText(
+      ['08:00-17:00', '09:00-18:00', '10:00-19:00', '12:00-21:00', '15:00-00:00', '22:00-07:00'].join('\n')
+    );
+    const result = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 60,
+      namedAgents: [],
+      leaveCounts: { annual: 4, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: withOvernight,
+      rules: DEFAULT_SCHEDULING_RULES,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    const nightRow = result.shiftDailyMix.find((r) => r.shiftId === '22:00-07:00');
+    assert.ok(nightRow, 'Overnight shift should be tracked in shiftDailyMix');
+    // Overnight curve only needs ~1 seat at 00:00-06:00 -> pool should stay tiny (<= 3 agents total, avg/day <= 2.2), never 5+
+    assert.ok(
+      nightRow.assignedPoolCount <= 3 && nightRow.avgPerDay <= 2.2,
+      `Overnight shift was over-allocated: pool=${nightRow.assignedPoolCount}, avg/day=${nightRow.avgPerDay}`
+    );
+
+    // Majority of agents cover daytime / afternoon peak bands proportionally
+    const daytimeShifts = result.shiftDailyMix
+      .filter((r) => !r.wrapsMidnight)
+      .reduce((s, r) => s + r.totalWeeklyShifts, 0);
+    assert.ok(daytimeShifts > nightRow.totalWeeklyShifts * 8);
+  });
+
+  it('auto-sorts added shifts chronologically & enforces per-shift manual target overrides + shiftDailyMix totals', () => {
+    const unsorted = parseShiftCatalogText(
+      ['15:00-00:00', '22:00-07:00', '09:00-18:00', '07:00-16:00', '12:00-21:00'].join('\n')
+    );
+    const sorted = sortShiftCatalogChronologically(unsorted);
+    assert.deepEqual(
+      sorted.map((s) => s.id),
+      ['07:00-16:00', '09:00-18:00', '12:00-21:00', '15:00-00:00', '22:00-07:00']
+    );
+
+    const rulesWithPins: SchedulingRules = {
+      ...DEFAULT_SCHEDULING_RULES,
+      shiftHeadcountOverrides: {
+        '22:00-07:00': 2,
+        '07:00-16:00': 6,
+      },
+    };
+    const result = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 30,
+      namedAgents: [],
+      leaveCounts: { annual: 2, maternity: 0, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: unsorted,
+      rules: rulesWithPins,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    const nightMix = result.shiftDailyMix.find((m) => m.shiftId === '22:00-07:00');
+    const earlyMix = result.shiftDailyMix.find((m) => m.shiftId === '07:00-16:00');
+    assert.equal(nightMix?.assignedPoolCount, 2);
+    assert.equal(nightMix?.targetOverride, 2);
+    assert.equal(earlyMix?.assignedPoolCount, 6);
+    assert.equal(earlyMix?.targetOverride, 6);
+
+    // Every shiftDailyMix row must sum exactly across Mon..Sun = totalWeeklyShifts, and total across catalog == totalWorkShifts
+    let sumWeekly = 0;
+    for (const row of result.shiftDailyMix) {
+      const rowDaySum = (Object.values(row.byDay) as number[]).reduce((a, b) => a + b, 0);
+      assert.equal(rowDaySum, row.totalWeeklyShifts);
+      sumWeekly += row.totalWeeklyShifts;
+    }
+    assert.equal(sumWeekly, result.summary.totalWorkShifts);
   });
 
   it('builds a styled Concentrix Tab 4 Scheduling Dashboard Excel workbook without losing rules or totals', async () => {

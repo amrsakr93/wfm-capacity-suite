@@ -319,8 +319,22 @@ export interface SchedulingRules {
   allowSunMonSplitOff: boolean; // true (Sun + Mon split wrap allowed)
   maxWeeklyStartDriftHours: number; // default 2h (08+09 OK, 10+12 OK, 15+08 blocked)
   minInterShiftRestHours: number; // default 12h (blocks clopening)
-  annualVisibilityInOutput: 'exclude' | 'show_muted'; // AL input excluded from output by default
+  annualVisibilityInOutput: 'exclude' | 'show_muted'; // default 'show_muted' -> AL shown full-week like other leaves
+  shiftHeadcountOverrides?: Record<string, number | null>; // optional manual agent pool per shift ID
   breakRules: BreakPlacementRules;
+}
+
+export interface ShiftDailyMixRow {
+  shiftId: string;
+  shiftLabel: string;
+  wrapsMidnight: boolean;
+  durationHours: number;
+  targetOverride: number | null;
+  assignedPoolCount: number;
+  avgPerDay: number;
+  byDay: Record<DayKey, number>;
+  totalWeeklyShifts: number;
+  shareOfShiftsPct: number;
 }
 
 export interface AgentDayAssignment {
@@ -378,6 +392,7 @@ export interface ScheduleGenerationResult {
   visibleOutputAgents: ScheduledAgentRow[];
   coverageByDay: Record<DayKey, IntervalCoverageCell[]>;
   dailyTotals: DailyCoverageSummary[];
+  shiftDailyMix: ShiftDailyMixRow[];
   summary: {
     totalRosterInput: number;
     annualExcluded: number;

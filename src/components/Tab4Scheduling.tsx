@@ -45,6 +45,7 @@ import {
   parseAgentRosterText,
   parseShiftCatalogFile,
   parseShiftCatalogText,
+  sortShiftCatalogChronologically,
   validateAgentScheduleRow,
 } from '../engine/scheduling.ts';
 import {
@@ -82,7 +83,7 @@ interface Tab4SchedulingProps {
 }
 
 const EXCEPTION_KEYS: { key: keyof LeaveCounts; code: ExceptionCode; label: string; hint: string }[] = [
-  { key: 'annual', code: 'AL', label: 'Annual Leave (AL)', hint: 'Input excluded from output' },
+  { key: 'annual', code: 'AL', label: 'Annual Leave (AL)', hint: 'Full-week AL lock' },
   { key: 'maternity', code: 'MAT', label: 'Maternity', hint: 'Full-week MAT lock' },
   { key: 'resignations', code: 'RES', label: 'Resignations', hint: 'Full-week RES lock' },
   { key: 'termination', code: 'TERM', label: 'Termination', hint: 'Full-week TERM lock' },
@@ -146,8 +147,9 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
   // Active inline popover editor for any Agent × Day cell
   const [editingCell, setEditingCell] = useState<{ agentId: string; dayKey: DayKey } | null>(null);
 
-  const shiftMap = useMemo(() => new Map(shiftCatalog.map((s) => [s.id, s])), [shiftCatalog]);
-  const enabledShifts = useMemo(() => shiftCatalog.filter((s) => s.enabled), [shiftCatalog]);
+  const sortedCatalog = useMemo(() => sortShiftCatalogChronologically(shiftCatalog), [shiftCatalog]);
+  const shiftMap = useMemo(() => new Map(sortedCatalog.map((s) => [s.id, s])), [sortedCatalog]);
+  const enabledShifts = useMemo(() => sortedCatalog.filter((s) => s.enabled), [sortedCatalog]);
 
   const totalRosterPool = inputMode === 'named' && namedAgents.length > 0 ? namedAgents.length : headcountInput;
   const totalExclusionsRequested =
@@ -200,7 +202,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
         onShowNotice('No valid shift times found in file (expected e.g. 09:00-18:00).');
         return;
       }
-      setShiftCatalog(parsed);
+      setShiftCatalog(sortShiftCatalogChronologically(parsed));
       onShowNotice(`Imported ${parsed.length} external shift definitions from ${file.name}.`);
     } catch (err) {
       onShowNotice(`Shift import error: ${(err as Error).message}`);
@@ -216,11 +218,11 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
       return;
     }
     if (replaceExisting) {
-      setShiftCatalog(parsed);
+      setShiftCatalog(sortShiftCatalogChronologically(parsed));
     } else {
       setShiftCatalog((prev) => {
         const seen = new Set(prev.map((s) => s.id));
-        return [...prev, ...parsed.filter((s) => !seen.has(s.id))];
+        return sortShiftCatalogChronologically([...prev, ...parsed.filter((s) => !seen.has(s.id))]);
       });
     }
     setShowPasteShifts(false);
@@ -237,7 +239,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
     setShiftCatalog((prev) => {
       const seen = new Set(prev.map((s) => s.id));
       const added = parsed.filter((s) => !seen.has(s.id));
-      return added.length > 0 ? [...prev, ...added] : prev;
+      return added.length > 0 ? sortShiftCatalogChronologically([...prev, ...added]) : prev;
     });
     setQuickShiftText('');
   };
@@ -380,7 +382,8 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
          ===================================================================== */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         {/* LEFT PANEL: AGENT POOL & LEAVE INPUT DEDUCTIONS */}
-        <section className="no-print bento-card-promax xl:col-span-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
+        <section className="no-print bento-card-promax xl:col-span-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs flex flex-col justify-between gap-4">
+          <div className="space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex items-start gap-3">
               <ProMaxIconBadge tone="cyan" size="md" pulse>
@@ -428,7 +431,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
 
           {/* Mode Controls: Headcount vs Uploaded Roster */}
           {inputMode === 'headcount' ? (
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-3.5 flex flex-wrap items-center justify-between gap-3">
+            <div className="cnx-input-tile rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-3.5 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div>
                   <label className="block text-[10px] uppercase font-bold tracking-wider text-slate-500 dark:text-slate-400 mb-1">
@@ -542,20 +545,20 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                   }))
                 }
                 className={`cnx-pill-interactive inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold cursor-pointer ${
-                  rules.annualVisibilityInOutput === 'exclude'
-                    ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                  rules.annualVisibilityInOutput !== 'exclude'
+                    ? 'border-sky-500/45 bg-sky-500/15 text-sky-700 dark:text-sky-300'
                     : 'border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                 }`}
               >
                 {rules.annualVisibilityInOutput === 'exclude' ? (
                   <>
                     <EyeOff className="w-3 h-3" />
-                    AL: Excluded from Output
+                    AL: Hidden from Output
                   </>
                 ) : (
                   <>
                     <Eye className="w-3 h-3" />
-                    AL: Shown Muted in Output
+                    AL: Visible Full-Week
                   </>
                 )}
               </button>
@@ -565,7 +568,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               {EXCEPTION_KEYS.map((item) => (
                 <div
                   key={item.code}
-                  className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/60 p-2.5"
+                  className="cnx-input-tile card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/60 p-2.5"
                 >
                   <div className="flex items-center justify-between gap-1 mb-1">
                     <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
@@ -629,6 +632,130 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               )}
             </div>
           </div>
+          </div>
+
+          {/* Pool Readiness & Leave Impact Bento Panel (balances card height cleanly) */}
+          {(() => {
+            const capTargetRounded = Math.round(capPlanFteTarget);
+            const fteGap = summary.activeSchedulableCount - capTargetRounded;
+            const totalLockedHeads = Math.min(totalRosterPool, totalExclusionsRequested);
+            const leaveShrinkPct =
+              totalRosterPool > 0 ? (totalLockedHeads / totalRosterPool) * 100 : 0;
+
+            return (
+              <div className="cnx-input-tile rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/75 dark:bg-slate-950/60 p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                    Pool Readiness &amp; Leave Impact Summary
+                  </div>
+                  {totalExclusionsRequested > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setLeaveCounts({
+                          annual: 0,
+                          maternity: 0,
+                          resignations: 0,
+                          termination: 0,
+                          upl: 0,
+                          paternity: 0,
+                        })
+                      }
+                      className="cnx-pill-interactive rounded-lg border border-rose-500/35 bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-300 cursor-pointer"
+                    >
+                      Reset All Leaves to 0
+                    </button>
+                  ) : (
+                    <span className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                      100% Roster Active
+                    </span>
+                  )}
+                </div>
+
+                {/* Color Legend matching Allocation Bar above */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10.5px] text-slate-500 dark:text-slate-400">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-gradient-to-r from-[#0088c2] to-[#14b8a6]" />
+                    Working Pool ({summary.activeSchedulableCount})
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                    Other Locks ({summary.fullWeekExceptionsCount})
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-slate-400" />
+                    Annual AL ({summary.annualExcluded})
+                  </span>
+                </div>
+
+                {/* 4 Clean WFM Summary Micro-Tiles */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/75 px-3 py-2">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Vs Tab 3 Cap Plan Target
+                    </div>
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2">
+                      <span className="text-sm font-mono font-extrabold text-slate-900 dark:text-white">
+                        {summary.activeSchedulableCount} / {capTargetRounded} FTE
+                      </span>
+                      <span
+                        className={`text-[11px] font-mono font-bold ${
+                          fteGap >= 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      >
+                        {fteGap >= 0 ? `+${fteGap} Surplus` : `${fteGap} Gap`}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/75 px-3 py-2">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Locked Leave Shrinkage
+                    </div>
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2">
+                      <span className="text-sm font-mono font-extrabold text-sky-600 dark:text-sky-400">
+                        {leaveShrinkPct.toFixed(1)}%
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                        {totalLockedHeads} / {totalRosterPool} locked
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/75 px-3 py-2">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Weekly Net Paid vs Req
+                    </div>
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2">
+                      <span className="text-sm font-mono font-extrabold text-slate-900 dark:text-white">
+                        {summary.totalScheduledNetHours.toFixed(0)}h /{' '}
+                        {summary.totalRequiredProdHours.toFixed(0)}h
+                      </span>
+                      <span className="text-[11px] font-mono font-bold text-teal-600 dark:text-teal-400">
+                        {summary.avgCoveragePct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/75 px-3 py-2">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Weekly Shift Supply
+                    </div>
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2">
+                      <span className="text-sm font-mono font-extrabold text-slate-900 dark:text-white">
+                        {summary.totalWorkShifts} shifts
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                        ~{(summary.totalWorkShifts / 7).toFixed(1)}/day avg
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </section>
 
         {/* RIGHT PANEL: EXTERNAL SHIFT CATALOG & HARD CONSTRAINTS */}
@@ -713,46 +840,164 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
             </div>
           )}
 
-          {/* Shift Chips Catalog + Quick Add */}
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              {shiftCatalog.map((shift) => (
-                <div
-                  key={shift.id}
-                  className={`cnx-pill-interactive group inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-mono font-bold transition ${
-                    shift.enabled
-                      ? 'border-sky-500/45 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-                      : 'border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-950/40 text-slate-400 line-through'
-                  }`}
+          {/* Elevated Chronological Shift Catalog Grid + Manual Per-Shift Headcount Control */}
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                <span>Shift Catalog &amp; Scheduled Headcount Control</span>
+                <span className="rounded-full border border-sky-500/35 bg-sky-500/10 px-2 py-0.5 text-[10px] font-mono font-bold text-sky-600 dark:text-sky-300 normal-case">
+                  Auto-Sorted 00:00 → 23:59
+                </span>
+              </div>
+              {Object.values(rules.shiftHeadcountOverrides ?? {}).some(
+                (v) => v != null && Number.isFinite(v)
+              ) && (
+                <button
+                  type="button"
+                  onClick={() => setRules((r) => ({ ...r, shiftHeadcountOverrides: {} }))}
+                  className="cnx-pill-interactive rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
                 >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setShiftCatalog((prev) =>
-                        prev.map((s) => (s.id === shift.id ? { ...s, enabled: !s.enabled } : s))
-                      )
-                    }
-                    className="cursor-pointer flex items-center gap-1"
-                    title="Click to enable/disable this shift in optimization"
+                  Reset All Pins to Auto
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {sortedCatalog.map((shift) => {
+                const mix = scheduleResult.shiftDailyMix.find((m) => m.shiftId === shift.id);
+                const rawOverride = rules.shiftHeadcountOverrides?.[shift.id];
+                const isPinned = rawOverride != null && Number.isFinite(rawOverride);
+                const poolCount = mix?.assignedPoolCount ?? 0;
+                const avgDaily = mix?.avgPerDay ?? 0;
+
+                return (
+                  <div
+                    key={shift.id}
+                    className={`cnx-input-tile rounded-xl border p-3 transition ${
+                      !shift.enabled
+                        ? 'opacity-55 border-slate-300 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-950/40'
+                        : isPinned
+                          ? 'border-amber-500/50 bg-amber-500/[0.06] dark:bg-amber-500/[0.08]'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/70'
+                    }`}
                   >
-                    <CalendarClock className="w-3.5 h-3.5" />
-                    <span>{shift.label}</span>
-                    <span className="text-[10px] opacity-75">({(shift.durationMin / 60).toFixed(0)}h)</span>
-                  </button>
-                  {shiftCatalog.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setShiftCatalog((prev) => prev.filter((s) => s.id !== shift.id))
-                      }
-                      aria-label={`Remove shift ${shift.label}`}
-                      className="ml-0.5 text-slate-400 hover:text-rose-500 cursor-pointer"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
+                    <div className="flex items-center justify-between gap-2 mb-2.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShiftCatalog((prev) =>
+                            prev.map((s) => (s.id === shift.id ? { ...s, enabled: !s.enabled } : s))
+                          )
+                        }
+                        className={`cursor-pointer flex items-center gap-1.5 text-xs font-mono font-extrabold whitespace-nowrap ${
+                          shift.enabled
+                            ? 'text-sky-700 dark:text-sky-300'
+                            : 'text-slate-400 line-through'
+                        }`}
+                        title="Click to enable/disable this shift in optimization"
+                      >
+                        <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+                        <span>{shift.label}</span>
+                        <span className="text-[10px] font-semibold opacity-75">
+                          ({(shift.durationMin / 60).toFixed(0)}h)
+                        </span>
+                      </button>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`whitespace-nowrap rounded-md px-2 py-0.5 text-[10px] font-mono font-bold ${
+                            isPinned
+                              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/35'
+                              : 'bg-sky-500/12 text-sky-700 dark:text-sky-300 border border-sky-500/30'
+                          }`}
+                        >
+                          {poolCount} ag
+                        </span>
+                        {sortedCatalog.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShiftCatalog((prev) => prev.filter((s) => s.id !== shift.id));
+                              setRules((r) => {
+                                if (!r.shiftHeadcountOverrides || !(shift.id in r.shiftHeadcountOverrides)) {
+                                  return r;
+                                }
+                                const next = { ...r.shiftHeadcountOverrides };
+                                delete next[shift.id];
+                                return { ...r, shiftHeadcountOverrides: next };
+                              });
+                            }}
+                            aria-label={`Remove shift ${shift.label}`}
+                            className="p-0.5 text-slate-400 hover:text-rose-500 cursor-pointer transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[10px] font-medium leading-tight">
+                        {!shift.enabled ? (
+                          <span className="text-slate-400">Disabled in pool</span>
+                        ) : isPinned ? (
+                          <span className="text-amber-600 dark:text-amber-300 font-bold">
+                            Pinned · ~{avgDaily.toFixed(1)}/d
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 dark:text-slate-400">
+                            Auto · ~{avgDaily.toFixed(1)}/d
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          max={500}
+                          step={1}
+                          disabled={!shift.enabled}
+                          value={isPinned ? String(rawOverride) : ''}
+                          placeholder={`Auto (${poolCount})`}
+                          aria-label={`Scheduled headcount override for shift ${shift.label}`}
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            setRules((r) => {
+                              const next = { ...(r.shiftHeadcountOverrides ?? {}) };
+                              if (raw === '') {
+                                delete next[shift.id];
+                              } else {
+                                const parsed = Number(raw);
+                                if (!Number.isFinite(parsed)) return r;
+                                next[shift.id] = Math.max(0, Math.min(500, Math.round(parsed)));
+                              }
+                              return { ...r, shiftHeadcountOverrides: next };
+                            });
+                          }}
+                          className="w-24 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right text-xs font-mono font-bold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-sky-500 disabled:opacity-50"
+                        />
+                        {isPinned && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRules((r) => {
+                                const next = { ...(r.shiftHeadcountOverrides ?? {}) };
+                                delete next[shift.id];
+                                return { ...r, shiftHeadcountOverrides: next };
+                              })
+                            }
+                            title="Clear manual pin and let Auto-Optimizer assign headcount"
+                            className="rounded-md border border-amber-500/40 bg-amber-500/12 px-1.5 py-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 cursor-pointer"
+                          >
+                            Auto
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex items-center gap-2">
@@ -777,7 +1022,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
 
           {/* Hard WFM Constraints Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
+            <div className="cnx-input-tile rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Workdays &amp; 2 OFF Rule
               </div>
@@ -802,7 +1047,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               </button>
             </div>
 
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
+            <div className="cnx-input-tile rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Fair Weekly Shift Band
               </div>
@@ -827,7 +1072,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               </div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
+            <div className="cnx-input-tile rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Min Inter-Shift Rest
               </div>
@@ -971,7 +1216,10 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
             <span className="text-xs font-semibold text-slate-400 ml-1.5">Agents</span>
           </div>
           <div className="text-[11px] text-sky-600 dark:text-sky-400 font-medium mt-1">
-            AL Input Excluded: {summary.annualExcluded} · Leaves: {summary.fullWeekExceptionsCount}
+            {rules.annualVisibilityInOutput === 'exclude'
+              ? `AL Hidden: ${summary.annualExcluded}`
+              : `AL in Roster: ${summary.annualExcluded}`}{' '}
+            · Other Leaves: {summary.fullWeekExceptionsCount}
           </div>
         </div>
 
@@ -1239,26 +1487,26 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
           </div>
         </div>
 
-        <div className="overflow-x-auto max-h-[620px]">
-          <table className="w-full text-xs border-collapse">
+        <div className="overflow-x-auto overflow-y-auto max-h-[620px]">
+          <table className="w-full min-w-[880px] lg:min-w-0 lg:table-fixed text-xs border-collapse">
             <thead className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
               <tr>
-                <th className="sticky left-0 z-30 bg-slate-100 dark:bg-slate-950 text-left px-2.5 py-2 font-bold min-w-[108px]">
+                <th className="sticky left-0 z-30 bg-slate-100 dark:bg-slate-950 text-left px-2 py-2 font-bold w-[10%]">
                   Agent / ID
                 </th>
-                <th className="text-center px-1.5 py-2 font-bold min-w-[84px]">OFF / Profile</th>
+                <th className="text-center px-1 py-2 font-bold w-[9%]">OFF / Profile</th>
                 {WEEK_DAYS.map((dk) => {
                   const dt = dailyTotals.find((d) => d.dayKey === dk);
                   return (
-                    <th key={dk} className="text-center px-1 py-2 font-bold min-w-[102px]">
+                    <th key={dk} className="text-center px-1 py-2 font-bold w-[10.4%]">
                       <div>{dk}</div>
-                      <div className="text-[10px] font-mono font-normal text-slate-400">
+                      <div className="text-[10px] font-mono font-normal text-slate-400 truncate">
                         {dt?.dateIso.slice(5)} · {dt?.coveragePct.toFixed(0)}%
                       </div>
                     </th>
                   );
                 })}
-                <th className="text-center px-1.5 py-2 font-bold min-w-[78px]">Compliance</th>
+                <th className="text-center px-1 py-2 font-bold w-[8.2%]">Compliance</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -1274,12 +1522,10 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                   return (
                     <tr
                       key={agent.agentId}
-                      className={`hover:bg-sky-500/5 transition ${
-                        agent.preAllocatedException === 'AL' ? 'opacity-65' : ''
-                      }`}
+                      className="hover:bg-sky-500/5 transition"
                     >
                       {/* Sticky Agent Name Column (Inline editable) */}
-                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 px-2.5 py-1.5 border-r border-slate-100 dark:border-slate-800/80">
+                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 px-2 py-1.5 border-r border-slate-100 dark:border-slate-800/80">
                         {editingNameAgentId === agent.agentId ? (
                           <input
                             type="text"
@@ -1288,7 +1534,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                             onChange={(e) => setEditingNameValue(e.target.value)}
                             onBlur={() => commitInlineName(agent.agentId)}
                             onKeyDown={(e) => e.key === 'Enter' && commitInlineName(agent.agentId)}
-                            className="w-full rounded-md border border-sky-500 bg-white dark:bg-slate-950 px-2 py-1 text-xs font-bold"
+                            className="w-full rounded-md border border-sky-500 bg-white dark:bg-slate-950 px-1.5 py-1 text-xs font-bold"
                           />
                         ) : (
                           <button
@@ -1297,19 +1543,19 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                               setEditingNameAgentId(agent.agentId);
                               setEditingNameValue(agent.agentName);
                             }}
-                            className="group flex items-center gap-1 text-left font-bold text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 cursor-pointer"
+                            className="w-full group flex items-center gap-1 text-left font-bold text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 cursor-pointer"
                             title="Click to rename agent"
                           >
-                            <span className="truncate max-w-[94px]">{agent.agentName}</span>
+                            <span className="truncate">{agent.agentName}</span>
                             <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-75 transition shrink-0" />
                           </button>
                         )}
                       </td>
 
                       {/* OFF Pattern & Drift Summary */}
-                      <td className="px-1.5 py-1.5 text-center">
+                      <td className="px-1 py-1.5 text-center">
                         <span
-                          className={`inline-block rounded-lg border px-1.5 py-0.5 text-[10px] font-bold ${
+                          className={`inline-block max-w-full rounded-lg border px-1.5 py-0.5 text-[10px] font-bold leading-tight ${
                             agent.preAllocatedException
                               ? EXCEPTION_BADGE_STYLES[agent.preAllocatedException]
                               : agent.offPatternLabel.includes('Split')
@@ -1320,7 +1566,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                           {agent.offPatternLabel || 'Custom'}
                         </span>
                         {agent.workDaysCount > 0 && (
-                          <div className="text-[9.5px] font-mono text-slate-400 mt-0.5">
+                          <div className="text-[9px] font-mono text-slate-400 mt-0.5 truncate">
                             {agent.workDaysCount}d · Δ{agent.shiftBandSpanHours.toFixed(1)}h · R
                             {agent.minRestHoursObserved !== null
                               ? `${agent.minRestHoursObserved.toFixed(0)}h`
@@ -1336,11 +1582,13 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                         const isException = cell && cell.status !== 'WORK' && cell.status !== 'OFF';
 
                         return (
-                          <td key={dk} className="px-1 py-1 text-center align-middle">
+                          <td key={dk} className="px-0.5 xl:px-1 py-1 text-center align-middle">
                             <button
                               type="button"
                               onClick={() => setEditingCell({ agentId: agent.agentId, dayKey: dk })}
-                              className={`cnx-pill-interactive w-full rounded-xl border px-1.5 py-1.5 text-left transition cursor-pointer ${
+                              className={`cnx-pill-interactive w-full ${
+                                showBreakDetails ? 'min-h-[46px]' : 'min-h-[34px]'
+                              } flex flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-center transition cursor-pointer overflow-hidden ${
                                 cell.status === 'WORK' && shift
                                   ? 'border-sky-500/30 bg-sky-500/10 hover:border-sky-400 dark:bg-sky-950/40'
                                   : isException
@@ -1349,23 +1597,23 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                               } ${cell.isManualOverride ? 'ring-1 ring-amber-400/70' : ''}`}
                             >
                               {cell.status === 'WORK' && shift ? (
-                                <div>
-                                  <div className="flex items-center justify-between gap-1 font-mono font-extrabold text-[11px] text-slate-900 dark:text-sky-200">
+                                <div className="w-full min-w-0 flex flex-col items-center justify-center text-center">
+                                  <div className="flex items-center justify-center gap-1 font-mono font-extrabold text-[10.5px] xl:text-[11px] text-slate-900 dark:text-sky-200 whitespace-nowrap">
                                     <span>{shift.label}</span>
                                     {cell.breaks && !cell.breaks.isValid && (
                                       <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
                                     )}
                                   </div>
                                   {showBreakDetails && cell.breaks && (
-                                    <div className="text-[9.5px] font-mono text-slate-600 dark:text-slate-300/90 mt-0.5 leading-tight truncate">
-                                      B1 {cell.breaks.firstBreakLabel.split('–')[0]} · L{' '}
-                                      {cell.breaks.lunchLabel.split('–')[0]} · B2{' '}
-                                      {cell.breaks.lastBreakLabel.split('–')[0]}
+                                    <div className="flex flex-wrap items-center justify-center gap-x-1 text-[8.5px] xl:text-[9px] font-mono text-slate-600 dark:text-slate-300/90 mt-0.5 leading-tight text-center">
+                                      <span>B1 {cell.breaks.firstBreakLabel.split('–')[0]}</span>
+                                      <span>L {cell.breaks.lunchLabel.split('–')[0]}</span>
+                                      <span>B2 {cell.breaks.lastBreakLabel.split('–')[0]}</span>
                                     </div>
                                   )}
                                 </div>
                               ) : (
-                                <div className="text-center font-mono font-bold text-[11px]">
+                                <div className="text-center font-mono font-bold text-[11px] truncate">
                                   {cell.status}
                                 </div>
                               )}
@@ -1375,18 +1623,18 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                       })}
 
                       {/* Compliance Status */}
-                      <td className="px-2.5 py-2 text-center">
+                      <td className="px-1 py-1.5 text-center">
                         {hasAlerts ? (
                           <span
                             title={agent.violations.join(' | ')}
-                            className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300"
+                            className="inline-flex max-w-full items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 truncate"
                           >
                             <AlertTriangle className="w-3 h-3 shrink-0" />
-                            {agent.violations[0]}
+                            <span className="truncate">{agent.violations[0]}</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
-                            <CheckCircle2 className="w-3 h-3" />
+                          <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
                             Valid
                           </span>
                         )}
@@ -1489,7 +1737,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                 Assign Shift (Pre-checked for ≤{rules.maxWeeklyStartDriftHours}h Drift &amp; ≥{rules.minInterShiftRestHours}h Rest)
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
-                {shiftCatalog.map((sh) => {
+                {sortedCatalog.map((sh) => {
                   const isCurrent =
                     editingTarget.assign.status === 'WORK' &&
                     editingTarget.assign.shiftId === sh.id;
@@ -1670,7 +1918,161 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
       )}
 
       {/* =====================================================================
-          6. DAILY SUMMARY ROLLUP TABLE
+          6. SCHEDULED HEADCOUNT PER SHIFT × PER DAY (MON → SUN)
+         ===================================================================== */}
+      <section className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
+        <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-100">
+            <CalendarClock className="w-4 h-4 text-sky-500" />
+            Scheduled Headcount Per Shift × Per Day (Mon → Sun Coverage Mix)
+          </div>
+          <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+            Chronologically Sorted · {scheduleResult.shiftDailyMix.length} Shifts · {summary.activeSchedulableCount} Active Pool
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="px-4 py-2 text-left">Shift Window</th>
+                <th className="px-3 py-2 text-right">Weekly Pool</th>
+                <th className="px-3 py-2 text-right">Avg / Day</th>
+                {WEEK_DAYS.map((d) => (
+                  <th key={d} className="px-3 py-2 text-right">
+                    {d}
+                  </th>
+                ))}
+                <th className="px-3 py-2 text-right">Weekly Shifts</th>
+                <th className="px-4 py-2 text-right">Mix %</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70 font-mono">
+              {scheduleResult.shiftDailyMix.map((row) => (
+                <tr key={row.shiftId} className="hover:bg-sky-500/5 transition">
+                  <td className="px-4 py-2 text-left font-sans">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono font-bold text-slate-900 dark:text-white">
+                        {row.shiftLabel}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        ({row.durationHours.toFixed(0)}h)
+                      </span>
+                      {row.wrapsMidnight && (
+                        <span className="rounded-md border border-indigo-500/35 bg-indigo-500/12 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+                          Overnight
+                        </span>
+                      )}
+                      {row.targetOverride != null && (
+                        <span className="rounded-md border border-amber-500/40 bg-amber-500/12 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                          Pinned: {row.targetOverride}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right font-bold">
+                    <span
+                      className={
+                        row.targetOverride != null
+                          ? 'text-amber-600 dark:text-amber-300'
+                          : 'text-sky-600 dark:text-sky-400'
+                      }
+                    >
+                      {row.assignedPoolCount}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-500 dark:text-slate-400">
+                    {row.avgPerDay.toFixed(1)}
+                  </td>
+                  {WEEK_DAYS.map((d) => (
+                    <td key={d} className="px-3 py-2 text-right">
+                      {row.byDay[d] > 0 ? (
+                        <span className="font-bold text-slate-800 dark:text-slate-100">
+                          {row.byDay[d]}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300 dark:text-slate-700">0</span>
+                      )}
+                    </td>
+                  ))}
+                  <td className="px-3 py-2 text-right font-bold text-slate-900 dark:text-white">
+                    {row.totalWeeklyShifts}
+                  </td>
+                  <td className="px-4 py-2 text-right font-semibold text-sky-600 dark:text-sky-400">
+                    {row.shareOfShiftsPct.toFixed(1)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-slate-50 dark:bg-slate-950/80 border-t-2 border-slate-200 dark:border-slate-800 font-mono text-xs">
+              {(() => {
+                const dailyActive = WEEK_DAYS.map((d) =>
+                  scheduleResult.shiftDailyMix.reduce((acc, row) => acc + row.byDay[d], 0)
+                );
+                const dailyOff = WEEK_DAYS.map(
+                  (d) => scheduleResult.agents.filter((a) => a.assignments[d].status === 'OFF').length
+                );
+                const dailyLeave = WEEK_DAYS.map(
+                  (d) =>
+                    scheduleResult.agents.filter(
+                      (a) => a.assignments[d].status !== 'WORK' && a.assignments[d].status !== 'OFF'
+                    ).length
+                );
+                const totalWeeklyActive = dailyActive.reduce((s, v) => s + v, 0);
+                const totalWeeklyOff = dailyOff.reduce((s, v) => s + v, 0);
+                const totalWeeklyLeave = dailyLeave.reduce((s, v) => s + v, 0);
+
+                return (
+                  <>
+                    <tr className="font-bold text-slate-900 dark:text-white bg-sky-500/[0.06]">
+                      <td className="px-4 py-2 text-left font-sans">TOTAL ACTIVE WORKING SHIFTS</td>
+                      <td className="px-3 py-2 text-right text-sky-600 dark:text-sky-400">
+                        {summary.activeSchedulableCount}
+                      </td>
+                      <td className="px-3 py-2 text-right">{(totalWeeklyActive / 7).toFixed(1)}</td>
+                      {dailyActive.map((cnt, idx) => (
+                        <td key={WEEK_DAYS[idx]} className="px-3 py-2 text-right text-sky-700 dark:text-sky-300">
+                          {cnt}
+                        </td>
+                      ))}
+                      <td className="px-3 py-2 text-right">{totalWeeklyActive}</td>
+                      <td className="px-4 py-2 text-right">100.0%</td>
+                    </tr>
+                    <tr className="text-emerald-700 dark:text-emerald-300">
+                      <td className="px-4 py-1.5 text-left font-sans font-semibold">Scheduled Day OFFs</td>
+                      <td className="px-3 py-1.5 text-right">—</td>
+                      <td className="px-3 py-1.5 text-right">{(totalWeeklyOff / 7).toFixed(1)}</td>
+                      {dailyOff.map((cnt, idx) => (
+                        <td key={WEEK_DAYS[idx]} className="px-3 py-1.5 text-right">
+                          {cnt}
+                        </td>
+                      ))}
+                      <td className="px-3 py-1.5 text-right font-semibold">{totalWeeklyOff}</td>
+                      <td className="px-4 py-1.5 text-right">—</td>
+                    </tr>
+                    <tr className="text-amber-700 dark:text-amber-300">
+                      <td className="px-4 py-1.5 text-left font-sans font-semibold">
+                        Full-Week Leaves (AL / MAT / RES / TERM / UPL / PAT)
+                      </td>
+                      <td className="px-3 py-1.5 text-right">{dailyLeave[0] ?? 0}</td>
+                      <td className="px-3 py-1.5 text-right">{(totalWeeklyLeave / 7).toFixed(1)}</td>
+                      {dailyLeave.map((cnt, idx) => (
+                        <td key={WEEK_DAYS[idx]} className="px-3 py-1.5 text-right">
+                          {cnt}
+                        </td>
+                      ))}
+                      <td className="px-3 py-1.5 text-right font-semibold">{totalWeeklyLeave}</td>
+                      <td className="px-4 py-1.5 text-right">—</td>
+                    </tr>
+                  </>
+                );
+              })()}
+            </tfoot>
+          </table>
+        </div>
+      </section>
+
+      {/* =====================================================================
+          7. DAILY SUMMARY ROLLUP TABLE
          ===================================================================== */}
       <section className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
         <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
