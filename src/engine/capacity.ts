@@ -190,6 +190,17 @@ export function buildWhatIfMatrix(
   const baseCap = calculateCapacityWaterfall(baseCapacityConfig);
 
   // Cache Erlang calculations per AHT delta (only 5 Erlang passes instead of 25!)
+  // Anchor dAht !== 0 smoothly onto baseCapacityConfig (whether driven by Tab 2 intraday curve or Monthly Cap Plan)
+  const basePlannerSummary = runErlangPlanner(intervals, erlangConfig);
+  const prodScale =
+    baseCapacityConfig.erlangProductiveHoursPerDay > 0 && basePlannerSummary.totalProductiveHours > 0
+      ? baseCapacityConfig.erlangProductiveHoursPerDay / basePlannerSummary.totalProductiveHours
+      : 1;
+  const pureScale =
+    baseCapacityConfig.pureTalkHoursPerDay > 0 && basePlannerSummary.totalPureTalkHours > 0
+      ? baseCapacityConfig.pureTalkHoursPerDay / basePlannerSummary.totalPureTalkHours
+      : 1;
+
   const erlangByAhtDelta = new Map<number, { prodHours: number; pureHours: number }>();
   for (const dAht of ahtDeltas) {
     const newAht = Math.max(30, erlangConfig.globalAhtSec + dAht);
@@ -211,27 +222,46 @@ export function buildWhatIfMatrix(
         globalAhtSec: newAht,
       });
       erlangByAhtDelta.set(dAht, {
-        prodHours: summary.totalProductiveHours,
-        pureHours: summary.totalPureTalkHours,
+        prodHours: summary.totalProductiveHours * prodScale,
+        pureHours: summary.totalPureTalkHours * pureScale,
       });
     }
   }
 
+  const baseOOOSum =
+    baseCapacityConfig.outOfOfficeBreakdown.annualLeavePct +
+    baseCapacityConfig.outOfOfficeBreakdown.sickLeavePct +
+    baseCapacityConfig.outOfOfficeBreakdown.publicHolidaysPct +
+    baseCapacityConfig.outOfOfficeBreakdown.unplannedAbsencePct;
+
   return ahtDeltas.map((dAht) => {
     const erlangRes = erlangByAhtDelta.get(dAht)!;
     return shrinkageDeltasPct.map((dShrink) => {
-      // Apply shrinkage delta safely onto unplanned out-of-office or compound shrinkage shift
+      // Apply shrinkage delta proportionally onto Out-of-Office breakdown so dShrink = 0 reproduces baseline exactly
       const nextOOO = clampPct(baseCap.outOfOfficeShrinkagePct + dShrink);
+      const nextOutBreakdown =
+        baseOOOSum > 1e-6
+          ? {
+              annualLeavePct:
+                (baseCapacityConfig.outOfOfficeBreakdown.annualLeavePct / baseOOOSum) * nextOOO,
+              sickLeavePct:
+                (baseCapacityConfig.outOfOfficeBreakdown.sickLeavePct / baseOOOSum) * nextOOO,
+              publicHolidaysPct:
+                (baseCapacityConfig.outOfOfficeBreakdown.publicHolidaysPct / baseOOOSum) * nextOOO,
+              unplannedAbsencePct:
+                (baseCapacityConfig.outOfOfficeBreakdown.unplannedAbsencePct / baseOOOSum) * nextOOO,
+            }
+          : {
+              annualLeavePct: nextOOO,
+              sickLeavePct: 0,
+              publicHolidaysPct: 0,
+              unplannedAbsencePct: 0,
+            };
       const nextConfig: CapacityConfig = {
         ...baseCapacityConfig,
         erlangProductiveHoursPerDay: erlangRes.prodHours,
         pureTalkHoursPerDay: erlangRes.pureHours,
-        outOfOfficeBreakdown: {
-          annualLeavePct: nextOOO,
-          sickLeavePct: 0,
-          publicHolidaysPct: 0,
-          unplannedAbsencePct: 0,
-        },
+        outOfOfficeBreakdown: nextOutBreakdown,
       };
       const sim = calculateCapacityWaterfall(nextConfig);
       return {

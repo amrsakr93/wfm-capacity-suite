@@ -19,7 +19,12 @@ import type {
   ShiftDailyMixRow,
   ShiftTemplate,
 } from './types.ts';
-import { computeErlangCMetrics, generateTimeLabels, runErlangPlanner } from './erlang.ts';
+import {
+  computeErlangAMetrics,
+  computeErlangCMetrics,
+  generateTimeLabels,
+  runErlangPlanner,
+} from './erlang.ts';
 import { parseTimeToMinutes } from './parsers.ts';
 import { buildIntervalInputsForGranularity, DEFAULT_30M_CURVES } from './samples.ts';
 
@@ -507,13 +512,15 @@ export function buildBreakAssignment(
 
 /**
  * Places First 15m + Lunch 30m + Last 15m breaks onto lowest-pressure 15-min slots
- * honoring continuous login <= 3h30m and inter-break gap >= 1h.
+ * honoring continuous login <= 3h30m, inter-break gap >= 1h, and quadratic break-concurrency smoothing.
  */
 export function assignOptimalBreaksForShift(
   shift: ShiftTemplate,
   daySurplus15: number[],
   rules: BreakPlacementRules = DEFAULT_BREAK_RULES,
-  nextDaySurplus15?: number[]
+  nextDaySurplus15?: number[],
+  breakLoad15?: number[],
+  nextDayBreakLoad15?: number[]
 ): BreakAssignment {
   const candidates = buildValidBreakCandidates(shift.durationMin, rules);
   if (candidates.length === 0) {
@@ -532,11 +539,17 @@ export function assignOptimalBreaksForShift(
       const wrappedNextDay = absMin >= 1440;
       const q = Math.floor((absMin % 1440) / 15);
       const arr = wrappedNextDay && nextDaySurplus15 ? nextDaySurplus15 : daySurplus15;
+      const loadArr = wrappedNextDay && nextDayBreakLoad15 ? nextDayBreakLoad15 : breakLoad15;
       const surplus = arr[q] ?? 0;
+      const concurrentBreaks = loadArr?.[q] ?? 0;
       if (surplus <= 0) {
-        pen += (1 - surplus) * 120; // Heavy penalty to protect peak/understaffed arrival slots
+        pen += (1 - surplus) * 135; // Heavy penalty to protect peak/understaffed arrival slots
       } else {
         pen -= Math.min(surplus, 12) * 10; // Reward high-surplus quiet slots
+      }
+      // Quadratic break staggering penalty prevents multiple agents crowding identical 15-min break slots
+      if (concurrentBreaks > 0) {
+        pen += concurrentBreaks * concurrentBreaks * 18;
       }
     }
     return pen;
@@ -781,26 +794,32 @@ export function recalculateScheduleCoverage(params: {
       const forecastVolume = prof.volumeBySlot[s] ?? 0;
       const varianceFte = Number((effectiveScheduledFte - requiredSeats).toFixed(2));
 
-      // Continuous SLA estimate interpolating fractional break impact cleanly
+      // Continuous SLA estimate interpolating fractional break impact cleanly (honors Erlang C or Palm/Erlang A)
+      const evalSlPct = (servers: number, vol: number): number =>
+        erlangConfig.useErlangA
+          ? computeErlangAMetrics(
+              servers,
+              vol,
+              erlangConfig.globalAhtSec,
+              intervalSec,
+              erlangConfig.slThresholdSec,
+              erlangConfig.avgPatienceSec
+            ).slPct
+          : computeErlangCMetrics(
+              servers,
+              vol,
+              erlangConfig.globalAhtSec,
+              intervalSec,
+              erlangConfig.slThresholdSec
+            ).slPct;
+
       const floorN = Math.floor(effectiveScheduledFte);
       const frac = effectiveScheduledFte - floorN;
       let projectedSlPct = 100;
       if (forecastVolume > 0) {
-        const slFloor = computeErlangCMetrics(
-          floorN,
-          forecastVolume,
-          erlangConfig.globalAhtSec,
-          intervalSec,
-          erlangConfig.slThresholdSec
-        ).slPct;
+        const slFloor = evalSlPct(floorN, forecastVolume);
         if (frac > 0.01) {
-          const slCeil = computeErlangCMetrics(
-            floorN + 1,
-            forecastVolume,
-            erlangConfig.globalAhtSec,
-            intervalSec,
-            erlangConfig.slThresholdSec
-          ).slPct;
+          const slCeil = evalSlPct(floorN + 1, forecastVolume);
           projectedSlPct = Number((slFloor + frac * (slCeil - slFloor)).toFixed(1));
         } else {
           projectedSlPct = Number(slFloor.toFixed(1));
@@ -1072,12 +1091,39 @@ export function generateWeeklySchedule(params: {
   // Build initial demand profiles
   const profiles = buildWeeklyDemandProfiles({ nextWeekDays, dayCurves, erlangConfig });
   const req15 = WEEK_DAYS.map((dk) => [...profiles[dk].required15]);
+  const peakReqByDay = WEEK_DAYS.map((_, d) => Math.max(1, ...req15[d]));
   const gross15: number[][] = Array.from({ length: 7 }, () => new Array(96).fill(0));
+  const expectedNet15: number[][] = Array.from({ length: 7 }, () => new Array(96).fill(0));
   const shiftDayCounts = new Map<string, number[]>();
   for (const sh of catalogToUse) shiftDayCounts.set(sh.id, new Array<number>(7).fill(0));
 
+  // Break-Aware Shift Kernel: punch-in/out edge buffers deliver 1.00 FTE while interior window reflects staggered breaks
+  const totalBreakMin =
+    rules.breakRules.firstBreakMin + rules.breakRules.lunchMin + rules.breakRules.lastBreakMin;
+  const kernelCache = new Map<string, { dayIdx: number; qIdx: number; netW: number }[]>();
+  const getShiftSlotKernel = (shift: ShiftTemplate, dayIdx: number) => {
+    const key = `${shift.id}\0${dayIdx}`;
+    const cached = kernelCache.get(key);
+    if (cached) return cached;
+    const rawSlots = getShiftSlotsForDay(shift, dayIdx);
+    const steps = rawSlots.length;
+    const edgeSteps = Math.min(
+      Math.floor(steps / 4),
+      Math.max(0, Math.round(rules.breakRules.edgeBufferMin / 15))
+    );
+    const interiorSteps = Math.max(1, steps - 2 * edgeSteps);
+    const interiorWeight = Math.max(0.7, 1 - totalBreakMin / (interiorSteps * 15));
+    const kernel = rawSlots.map((pos, idx) => ({
+      dayIdx: pos.dayIdx,
+      qIdx: pos.qIdx,
+      netW: idx < edgeSteps || idx >= steps - edgeSteps ? 1.0 : interiorWeight,
+    }));
+    kernelCache.set(key, kernel);
+    return kernel;
+  };
+
   const avgNetShiftHrs =
-    catalogToUse.reduce((s, sh) => s + Math.max(1, (sh.durationMin - 60) / 60), 0) /
+    catalogToUse.reduce((s, sh) => s + Math.max(1, (sh.durationMin - totalBreakMin) / 60), 0) /
     catalogToUse.length;
 
   // 3. Partition Active Pool vs Explicit Per-Shift Manual Pool Overrides
@@ -1127,17 +1173,16 @@ export function generateWeeklySchedule(params: {
             ? daytimeFallback
             : catalogToUse;
 
-  // Compute interval objective helpers
-  const targetGrossForReq = (req: number) => (req <= 2 ? req : req / 0.889);
-  const intervalCost = (req: number, gross: number): number => {
-    const tgt = targetGrossForReq(req);
-    if (gross < tgt) {
-      const diff = tgt - gross;
-      return diff * diff * 5.5 + diff * 3.0;
+  // Compute Erlang-weighted interval objective helpers (evaluates expected Net Productive FTE vs Erlang Required)
+  const intervalCost = (req: number, netCov: number, dayIdx = 0): number => {
+    if (netCov < req) {
+      const diff = req - netCov;
+      const peakWeight = req <= 2 ? 1.0 : 1 + 0.45 * (req / Math.max(1, peakReqByDay[dayIdx]));
+      return (diff * diff * 6.5 + diff * 3.5) * peakWeight;
     }
-    const ex = gross - tgt;
+    const ex = netCov - req;
     return req <= 2
-      ? ex * (5.8 + 4.5 / Math.max(0.8, req)) + ex * ex * 3.8
+      ? ex * (6.2 + 4.8 / Math.max(0.8, req)) + ex * ex * 4.0
       : ex * (1.1 + 1.8 / Math.max(1.0, req)) + ex * ex * 0.22;
   };
   const dayOverrideCost = (shiftId: string, dIdx: number, count: number): number => {
@@ -1294,8 +1339,9 @@ export function generateWeeklySchedule(params: {
       if (!isOff && pinnedSh) {
         assignments[dk] = { dayKey: dk, status: 'WORK', shiftId: pinnedSh.id, breaks: null };
         shiftDayCounts.get(pinnedSh.id)![d] += 1;
-        for (const pos of getShiftSlotsForDay(pinnedSh, d)) {
+        for (const pos of getShiftSlotKernel(pinnedSh, d)) {
           gross15[pos.dayIdx][pos.qIdx] += 1;
+          expectedNet15[pos.dayIdx][pos.qIdx] += pos.netW;
         }
       } else {
         assignments[dk] = {
@@ -1358,29 +1404,30 @@ export function generateWeeklySchedule(params: {
     return true;
   };
 
-  // Marginal WFM Shift Scoring: rewards unfilled Erlang demand & explicit daily pins, penalizes quiet/overnight waste
+  // Marginal WFM Shift Scoring using Break-Aware Kernel & Erlang Peak Urgency
   const scoreShiftDeltaWithDayOv = (
     candidate: ShiftTemplate,
     dayIdx: number,
-    grossMat: number[][],
+    netMat: number[][],
     shCounts: Map<string, number[]>
   ): number => {
-    const slots = getShiftSlotsForDay(candidate, dayIdx);
-    const netWeight = Math.max(0.75, (candidate.durationMin - 60) / candidate.durationMin);
+    const slots = getShiftSlotKernel(candidate, dayIdx);
+    const peakD = Math.max(1, peakReqByDay[dayIdx]);
     let score = 0;
     for (const pos of slots) {
       const req = req15[pos.dayIdx][pos.qIdx];
-      const currGross = grossMat[pos.dayIdx][pos.qIdx];
-      const targetGross = req <= 2 ? req : req / netWeight;
-      if (currGross < targetGross) {
-        const fill = Math.min(1, targetGross - currGross);
-        const shortageUrgency = (targetGross - currGross) / Math.max(1, targetGross);
-        score += fill * (14 + 6 * Math.min(1, shortageUrgency));
+      const currNet = netMat[pos.dayIdx][pos.qIdx];
+      const netGain = pos.netW;
+      if (currNet < req) {
+        const fill = Math.min(netGain, req - currNet);
+        const shortageUrgency = (req - currNet) / Math.max(1, req);
+        const peakUrgency = req <= 2 ? 1.0 : 1 + 0.35 * (req / peakD);
+        score += fill * (14 + 6 * Math.min(1, shortageUrgency)) * peakUrgency;
       } else {
-        const excessBefore = currGross - targetGross;
-        const ratioWaste = (excessBefore + 1) / Math.max(0.8, targetGross);
-        const quietExtra = req <= 2 ? 5.2 + 3.0 * excessBefore : 1.35;
-        score -= quietExtra + ratioWaste * (req <= 2 ? 4.5 : 1.6);
+        const excessBefore = currNet - req;
+        const ratioWaste = (excessBefore + netGain) / Math.max(0.8, req);
+        const quietExtra = req <= 2 ? 5.6 + 3.2 * excessBefore : 1.35;
+        score -= (quietExtra + ratioWaste * (req <= 2 ? 4.8 : 1.6)) * netGain;
       }
     }
     const dayOv = dayOverridesMap.get(candidate.id)?.get(dayIdx);
@@ -1416,7 +1463,7 @@ export function generateWeeklySchedule(params: {
   };
 
   // 5A. Compute Aggregate Daily Shift-Demand Blueprint for Auto Pool (Free of Initial Agent Drift Lockouts)
-  const simGross = gross15.map((row) => [...row]);
+  const simNet = expectedNet15.map((row) => [...row]);
   const simShCounts = new Map<string, number[]>();
   for (const sh of catalogToUse) simShCounts.set(sh.id, [...(shiftDayCounts.get(sh.id) ?? new Array(7).fill(0))]);
 
@@ -1434,7 +1481,7 @@ export function generateWeeklySchedule(params: {
       let bestSh = allowedDay[0] ?? primaryAutoPool[0];
       let bestSc = -Infinity;
       for (const cand of allowedDay) {
-        const sc = scoreShiftDeltaWithDayOv(cand, dIdx, simGross, simShCounts);
+        const sc = scoreShiftDeltaWithDayOv(cand, dIdx, simNet, simShCounts);
         if (sc > bestSc) {
           bestSc = sc;
           bestSh = cand;
@@ -1442,8 +1489,8 @@ export function generateWeeklySchedule(params: {
       }
       blueprintCount.get(bestSh.id)![dIdx] += 1;
       simShCounts.get(bestSh.id)![dIdx] += 1;
-      for (const pos of getShiftSlotsForDay(bestSh, dIdx)) {
-        simGross[pos.dayIdx][pos.qIdx] += 1;
+      for (const pos of getShiftSlotKernel(bestSh, dIdx)) {
+        simNet[pos.dayIdx][pos.qIdx] += pos.netW;
       }
     }
   }
@@ -1494,7 +1541,7 @@ export function generateWeeklySchedule(params: {
 
       for (const cand of dayCandidates) {
         if (!isCandidateShiftFeasible(row, dIdx, cand)) continue;
-        let sc = scoreShiftDeltaWithDayOv(cand, dIdx, gross15, shiftDayCounts);
+        let sc = scoreShiftDeltaWithDayOv(cand, dIdx, expectedNet15, shiftDayCounts);
         // Guide agent onto their stratified anchor band & unfilled aggregate blueprint counts
         const bpLeft = blueprintRemaining.get(cand.id)?.[dIdx] ?? 0;
         if (bpLeft > 0) sc += 18 + Math.min(20, bpLeft * 2.5);
@@ -1512,8 +1559,9 @@ export function generateWeeklySchedule(params: {
       shiftDayCounts.get(bestShift.id)![dIdx] += 1;
       const bpArr = blueprintRemaining.get(bestShift.id);
       if (bpArr && bpArr[dIdx] > 0) bpArr[dIdx] -= 1;
-      for (const pos of getShiftSlotsForDay(bestShift, dIdx)) {
+      for (const pos of getShiftSlotKernel(bestShift, dIdx)) {
         gross15[pos.dayIdx][pos.qIdx] += 1;
+        expectedNet15[pos.dayIdx][pos.qIdx] += pos.netW;
       }
     }
   });
@@ -1526,37 +1574,37 @@ export function generateWeeklySchedule(params: {
   }
 
   const computeDeltaCost = (mutations: DayMutation[]): number => {
-    const slotDelta = new Map<number, number>(); // key = d * 96 + q
-    const countDelta = new Map<string, number>(); // key = `${shId}|${dIdx}`
+    const netSlotDelta = new Map<number, number>(); // key = d * 96 + q -> expectedNet delta
+    const countDelta = new Map<string, number>(); // key = `${shId}\0${dIdx}`
 
     for (const m of mutations) {
       if (m.oldShift && m.newShift && m.oldShift.id === m.newShift.id) continue;
       if (m.oldShift) {
         const ck = `${m.oldShift.id}\0${m.dayIdx}`;
         countDelta.set(ck, (countDelta.get(ck) ?? 0) - 1);
-        for (const pos of getShiftSlotsForDay(m.oldShift, m.dayIdx)) {
+        for (const pos of getShiftSlotKernel(m.oldShift, m.dayIdx)) {
           const sk = pos.dayIdx * 96 + pos.qIdx;
-          slotDelta.set(sk, (slotDelta.get(sk) ?? 0) - 1);
+          netSlotDelta.set(sk, (netSlotDelta.get(sk) ?? 0) - pos.netW);
         }
       }
       if (m.newShift) {
         const ck = `${m.newShift.id}\0${m.dayIdx}`;
         countDelta.set(ck, (countDelta.get(ck) ?? 0) + 1);
-        for (const pos of getShiftSlotsForDay(m.newShift, m.dayIdx)) {
+        for (const pos of getShiftSlotKernel(m.newShift, m.dayIdx)) {
           const sk = pos.dayIdx * 96 + pos.qIdx;
-          slotDelta.set(sk, (slotDelta.get(sk) ?? 0) + 1);
+          netSlotDelta.set(sk, (netSlotDelta.get(sk) ?? 0) + pos.netW);
         }
       }
     }
 
     let delta = 0;
-    for (const [sk, dv] of slotDelta.entries()) {
-      if (dv === 0) continue;
+    for (const [sk, dv] of netSlotDelta.entries()) {
+      if (Math.abs(dv) < 1e-9) continue;
       const d = Math.floor(sk / 96);
       const q = sk % 96;
       const req = req15[d][q];
-      const currG = gross15[d][q];
-      delta += intervalCost(req, currG + dv) - intervalCost(req, currG);
+      const currNet = expectedNet15[d][q];
+      delta += intervalCost(req, currNet + dv, d) - intervalCost(req, currNet, d);
     }
     for (const [ck, dc] of countDelta.entries()) {
       if (dc === 0) continue;
@@ -1574,14 +1622,16 @@ export function generateWeeklySchedule(params: {
       if (m.oldShift && m.newShift && m.oldShift.id === m.newShift.id) continue;
       if (m.oldShift) {
         shiftDayCounts.get(m.oldShift.id)![m.dayIdx] -= 1;
-        for (const pos of getShiftSlotsForDay(m.oldShift, m.dayIdx)) {
+        for (const pos of getShiftSlotKernel(m.oldShift, m.dayIdx)) {
           gross15[pos.dayIdx][pos.qIdx] -= 1;
+          expectedNet15[pos.dayIdx][pos.qIdx] = Math.max(0, expectedNet15[pos.dayIdx][pos.qIdx] - pos.netW);
         }
       }
       if (m.newShift) {
         shiftDayCounts.get(m.newShift.id)![m.dayIdx] += 1;
-        for (const pos of getShiftSlotsForDay(m.newShift, m.dayIdx)) {
+        for (const pos of getShiftSlotKernel(m.newShift, m.dayIdx)) {
           gross15[pos.dayIdx][pos.qIdx] += 1;
+          expectedNet15[pos.dayIdx][pos.qIdx] += pos.netW;
         }
       }
     }
@@ -1769,19 +1819,111 @@ export function generateWeeklySchedule(params: {
       }
     }
 
+    // Move 4: Pairwise 2-Agent Kempe Relay Swap on Same Day (Breaks Drift-Band Locks in O(S^3))
+    // Example: Agent A moves 08:00 -> 10:00 while Agent B moves 10:00 -> 12:00 simultaneously
+    for (let dIdx = 0; dIdx < 7; dIdx++) {
+      const dk = WEEK_DAYS[dIdx];
+      const dayCands = getAllowedShiftsOnDay(dIdx);
+      if (dayCands.length < 3) continue;
+
+      let keepRelaying = true;
+      for (let chain = 0; chain < 12 && keepRelaying; chain++) {
+        keepRelaying = false;
+        const byShift = new Map<string, number[]>();
+        for (const rosterIdx of autoActiveIndices) {
+          const a = draftRows[rosterIdx].assignments[dk];
+          if (a.status !== 'WORK' || !a.shiftId) continue;
+          let list = byShift.get(a.shiftId);
+          if (!list) {
+            list = [];
+            byShift.set(a.shiftId, list);
+          }
+          list.push(rosterIdx);
+        }
+
+        let bestSwap: {
+          idxA: number;
+          idxB: number;
+          shA: ShiftTemplate;
+          bridge: ShiftTemplate;
+          shBTo: ShiftTemplate;
+        } | null = null;
+        let bestRelayDelta = -0.15;
+
+        for (const shA of dayCands) {
+          const poolA = byShift.get(shA.id);
+          if (!poolA || poolA.length === 0) continue;
+          for (const bridge of dayCands) {
+            if (bridge.id === shA.id) continue;
+            const poolBridge = byShift.get(bridge.id);
+            if (!poolBridge || poolBridge.length === 0) continue;
+
+            // Find first Auto agent on shA that can legally switch to bridge on dIdx
+            let feasibleA = -1;
+            for (const rIdx of poolA) {
+              if (isCandidateShiftFeasible(draftRows[rIdx], dIdx, bridge)) {
+                feasibleA = rIdx;
+                break;
+              }
+            }
+            if (feasibleA < 0) continue;
+
+            for (const shBTo of dayCands) {
+              if (shBTo.id === bridge.id || shBTo.id === shA.id) continue;
+              let feasibleB = -1;
+              for (const rIdx of poolBridge) {
+                if (isCandidateShiftFeasible(draftRows[rIdx], dIdx, shBTo)) {
+                  feasibleB = rIdx;
+                  break;
+                }
+              }
+              if (feasibleB < 0) continue;
+
+              const dCost = computeDeltaCost([
+                { dayIdx: dIdx, oldShift: shA, newShift: bridge },
+                { dayIdx: dIdx, oldShift: bridge, newShift: shBTo },
+              ]);
+              if (dCost < bestRelayDelta) {
+                bestRelayDelta = dCost;
+                bestSwap = { idxA: feasibleA, idxB: feasibleB, shA, bridge, shBTo };
+              }
+            }
+          }
+        }
+
+        if (bestSwap) {
+          applyMutationsToMatrices([
+            { dayIdx: dIdx, oldShift: bestSwap.shA, newShift: bestSwap.bridge },
+            { dayIdx: dIdx, oldShift: bestSwap.bridge, newShift: bestSwap.shBTo },
+          ]);
+          draftRows[bestSwap.idxA].assignments[dk].shiftId = bestSwap.bridge.id;
+          draftRows[bestSwap.idxB].assignments[dk].shiftId = bestSwap.shBTo.id;
+          improved = true;
+          keepRelaying = true;
+        }
+      }
+    }
+
     if (!improved) break;
   }
 
-  // 6. Assign Staggered 15-Min Breaks (First 15 + Lunch 30 + Last 15) Updating Surplus Live
+  // 6. Assign Staggered 15-Min Breaks (First 15 + Lunch 30 + Last 15) with Quadratic Concurrency Smoothing & 1-Opt Polish
   const liveSurplus15: number[][] = Array.from({ length: 7 }, (_, d) =>
     Array.from({ length: 96 }, (__, q) => gross15[d][q] - req15[d][q])
   );
+  const breakLoad15: number[][] = Array.from({ length: 7 }, () => new Array(96).fill(0));
 
   for (let dIdx = 0; dIdx < 7; dIdx++) {
     const dk = WEEK_DAYS[dIdx];
     const nextSurplus = liveSurplus15[(dIdx + 1) % 7];
-    // Sort agents so same-shift agents stagger cleanly one after another
-    const workingToday = activeIndices.filter((rIdx) => draftRows[rIdx].assignments[dk].status === 'WORK');
+    const nextBreakLoad = breakLoad15[(dIdx + 1) % 7];
+    const workingToday = activeIndices
+      .filter((rIdx) => draftRows[rIdx].assignments[dk].status === 'WORK')
+      .sort((a, b) => {
+        const sA = shiftMap.get(draftRows[a].assignments[dk].shiftId ?? '')?.startMin ?? 0;
+        const sB = shiftMap.get(draftRows[b].assignments[dk].shiftId ?? '')?.startMin ?? 0;
+        return sA - sB || a - b;
+      });
     for (const rosterIdx of workingToday) {
       const assign = draftRows[rosterIdx].assignments[dk];
       const shift = assign.shiftId ? shiftMap.get(assign.shiftId) : null;
@@ -1790,10 +1932,143 @@ export function generateWeeklySchedule(params: {
         shift,
         liveSurplus15[dIdx],
         rules.breakRules,
-        nextSurplus
+        nextSurplus,
+        breakLoad15[dIdx],
+        nextBreakLoad
       );
       assign.breaks = breaks;
       applyBreaksToArray15(liveSurplus15, shift, dIdx, breaks, rules.breakRules, -1);
+      applyBreaksToArray15(breakLoad15, shift, dIdx, breaks, rules.breakRules, 1);
+    }
+
+    // 1-Opt Break Re-Staggering Polish Pass so early agents react to later agents' concurrency
+    for (const rosterIdx of workingToday) {
+      const assign = draftRows[rosterIdx].assignments[dk];
+      const shift = assign.shiftId ? shiftMap.get(assign.shiftId) : null;
+      if (!shift || !assign.breaks) continue;
+      applyBreaksToArray15(liveSurplus15, shift, dIdx, assign.breaks, rules.breakRules, 1);
+      applyBreaksToArray15(breakLoad15, shift, dIdx, assign.breaks, rules.breakRules, -1);
+      const refreshed = assignOptimalBreaksForShift(
+        shift,
+        liveSurplus15[dIdx],
+        rules.breakRules,
+        nextSurplus,
+        breakLoad15[dIdx],
+        nextBreakLoad
+      );
+      assign.breaks = refreshed;
+      applyBreaksToArray15(liveSurplus15, shift, dIdx, refreshed, rules.breakRules, -1);
+      applyBreaksToArray15(breakLoad15, shift, dIdx, refreshed, rules.breakRules, 1);
+    }
+  }
+
+  // 7. Closed-Loop Break-Coupled Net Shift Polish (Uses ACTUAL gross15 - breakLoad15 vs req15)
+  const actualNet15: number[][] = Array.from({ length: 7 }, (_, d) =>
+    Array.from({ length: 96 }, (__, q) => gross15[d][q] - breakLoad15[d][q])
+  );
+  for (let dIdx = 0; dIdx < 7; dIdx++) {
+    const dk = WEEK_DAYS[dIdx];
+    const nextSurplus = liveSurplus15[(dIdx + 1) % 7];
+    const nextBreakLoad = breakLoad15[(dIdx + 1) % 7];
+    for (const rosterIdx of autoActiveIndices) {
+      const row = draftRows[rosterIdx];
+      const assign = row.assignments[dk];
+      if (assign.status !== 'WORK' || !assign.shiftId || !assign.breaks) continue;
+      const oldShift = shiftMap.get(assign.shiftId);
+      if (!oldShift) continue;
+
+      const dayCands = getAllowedShiftsOnDay(dIdx, oldShift.id);
+      if (dayCands.length <= 1) continue;
+
+      // Temporarily lift old shift + old breaks to evaluate true net cost cleanly
+      const oldBreaks = assign.breaks;
+      const oldGrossSlots = getShiftSlotsForDay(oldShift, dIdx);
+      for (const pos of oldGrossSlots) {
+        gross15[pos.dayIdx][pos.qIdx] -= 1;
+        actualNet15[pos.dayIdx][pos.qIdx] -= 1;
+        liveSurplus15[pos.dayIdx][pos.qIdx] -= 1;
+      }
+      applyBreaksToArray15(breakLoad15, oldShift, dIdx, oldBreaks, rules.breakRules, -1);
+      applyBreaksToArray15(liveSurplus15, oldShift, dIdx, oldBreaks, rules.breakRules, 1);
+      applyBreaksToArray15(actualNet15, oldShift, dIdx, oldBreaks, rules.breakRules, 1);
+      shiftDayCounts.get(oldShift.id)![dIdx] -= 1;
+
+      const evalNetCostAfterPlace = (cand: ShiftTemplate, candBreaks: BreakAssignment): number => {
+        const netSlotDelta = new Map<number, number>();
+        for (const pos of getShiftSlotsForDay(cand, dIdx)) {
+          const sk = pos.dayIdx * 96 + pos.qIdx;
+          netSlotDelta.set(sk, (netSlotDelta.get(sk) ?? 0) + 1);
+        }
+        const blkList = [
+          { off: candBreaks.firstBreakOffsetMin, dur: rules.breakRules.firstBreakMin },
+          { off: candBreaks.lunchOffsetMin, dur: rules.breakRules.lunchMin },
+          { off: candBreaks.lastBreakOffsetMin, dur: rules.breakRules.lastBreakMin },
+        ];
+        for (const blk of blkList) {
+          const steps = Math.max(1, Math.round(blk.dur / 15));
+          for (let k = 0; k < steps; k++) {
+            const absMin = cand.startMin + blk.off + k * 15;
+            const tD = (dIdx + Math.floor(absMin / 1440)) % 7;
+            const q = Math.floor((absMin % 1440) / 15);
+            const sk = tD * 96 + q;
+            netSlotDelta.set(sk, (netSlotDelta.get(sk) ?? 0) - 1);
+          }
+        }
+        let cost = 0;
+        for (const [sk, dv] of netSlotDelta.entries()) {
+          if (dv === 0) continue;
+          const dd = Math.floor(sk / 96);
+          const q = sk % 96;
+          cost +=
+            intervalCost(req15[dd][q], actualNet15[dd][q] + dv, dd) -
+            intervalCost(req15[dd][q], actualNet15[dd][q], dd);
+        }
+        const currCnt = shiftDayCounts.get(cand.id)?.[dIdx] ?? 0;
+        cost += dayOverrideCost(cand.id, dIdx, currCnt + 1) - dayOverrideCost(cand.id, dIdx, currCnt);
+        return cost;
+      };
+
+      const oldCost = evalNetCostAfterPlace(oldShift, oldBreaks);
+      let chosenShift = oldShift;
+      let chosenBreaks = oldBreaks;
+      let bestCost = oldCost - 0.1;
+
+      for (const cand of dayCands) {
+        if (cand.id === oldShift.id) continue;
+        if (!isCandidateShiftFeasible(row, dIdx, cand)) continue;
+        // Preview candidate breaks on cand without modifying live matrices permanently
+        const candSlots = getShiftSlotsForDay(cand, dIdx);
+        for (const pos of candSlots) liveSurplus15[pos.dayIdx][pos.qIdx] += 1;
+        const previewBreaks = assignOptimalBreaksForShift(
+          cand,
+          liveSurplus15[dIdx],
+          rules.breakRules,
+          nextSurplus,
+          breakLoad15[dIdx],
+          nextBreakLoad
+        );
+        for (const pos of candSlots) liveSurplus15[pos.dayIdx][pos.qIdx] -= 1;
+
+        const cCost = evalNetCostAfterPlace(cand, previewBreaks);
+        if (cCost < bestCost) {
+          bestCost = cCost;
+          chosenShift = cand;
+          chosenBreaks = previewBreaks;
+        }
+      }
+
+      // Apply winner (either kept old or improved candidate) back onto all live matrices
+      assign.shiftId = chosenShift.id;
+      assign.breaks = chosenBreaks;
+      shiftDayCounts.get(chosenShift.id)![dIdx] += 1;
+      for (const pos of getShiftSlotsForDay(chosenShift, dIdx)) {
+        gross15[pos.dayIdx][pos.qIdx] += 1;
+        actualNet15[pos.dayIdx][pos.qIdx] += 1;
+        liveSurplus15[pos.dayIdx][pos.qIdx] += 1;
+      }
+      applyBreaksToArray15(breakLoad15, chosenShift, dIdx, chosenBreaks, rules.breakRules, 1);
+      applyBreaksToArray15(liveSurplus15, chosenShift, dIdx, chosenBreaks, rules.breakRules, -1);
+      applyBreaksToArray15(actualNet15, chosenShift, dIdx, chosenBreaks, rules.breakRules, -1);
     }
   }
 

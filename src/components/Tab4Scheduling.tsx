@@ -104,6 +104,158 @@ const EXCEPTION_BADGE_STYLES: Record<ExceptionCode, string> = {
 
 type MatrixFilter = 'all' | 'active' | 'leaves' | 'alerts' | 'manual';
 
+function normalizeRosterText(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f\u064b-\u065f\u0670\u0640]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .trim();
+}
+
+/** Bounded Damerau-Levenshtein distance <= 1 check for forgiving typo tolerance on words >= 4 chars. */
+function isWithinEditDistanceOne(a: string, b: string): boolean {
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  if (a === b) return true;
+  if (la === lb) {
+    let diffs = 0;
+    for (let i = 0; i < la; i++) {
+      if (a[i] !== b[i]) {
+        // Check adjacent transposition (e.g. "ahmde" vs "ahmed")
+        if (i + 1 < la && a[i] === b[i + 1] && a[i + 1] === b[i]) {
+          return a.slice(i + 2) === b.slice(i + 2) && diffs === 0;
+        }
+        diffs++;
+        if (diffs > 1) return false;
+      }
+    }
+    return diffs === 1;
+  }
+  const shorter = la < lb ? a : b;
+  const longer = la < lb ? b : a;
+  let i = 0;
+  let j = 0;
+  let skipped = false;
+  while (i < shorter.length && j < longer.length) {
+    if (shorter[i] === longer[j]) {
+      i++;
+      j++;
+    } else if (!skipped) {
+      skipped = true;
+      j++;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+function matchesSmartRosterSearch(
+  agent: ScheduledAgentRow,
+  rowNum: number,
+  rawQuery: string,
+  shiftMap: Map<string, ShiftTemplate>
+): boolean {
+  const qNorm = normalizeRosterText(rawQuery);
+  if (!qNorm) return true;
+
+  // Direct row-query fast path ("Agent 10", "agent10", "ag10", "#10") avoids shift-time collisions ("10:00")
+  const directRowMatch = qNorm.match(/^(?:agent\s*#?|ag\s*#?|#)(\d+)$/);
+  if (directRowMatch) {
+    const targetNum = Number(directRowMatch[1]);
+    return (
+      rowNum === targetNum ||
+      normalizeRosterText(agent.agentName) === `agent ${targetNum}` ||
+      normalizeRosterText(agent.agentId) === `agent-${targetNum}`
+    );
+  }
+
+  // Keep bound "agent 10" / "agent10" / "ag10" references intact as #10 inside compound queries
+  const qPrepared = qNorm.replace(/\b(?:agent|ag)\s*#?(\d+)\b/g, '#$1');
+
+  // Preserve explicit #N row-number syntax while splitting other tokens cleanly
+  const qTokens = qPrepared
+    .split(/\s+/)
+    .flatMap((t) => {
+      if (t.startsWith('#') && /^#\d+$/.test(t)) return [t];
+      return t
+        .replace(/([a-z\u0600-\u06ff])(\d)/g, '$1 $2')
+        .replace(/(\d)([a-z\u0600-\u06ff])/g, '$1 $2')
+        .replace(/[-+/_.,()]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+    })
+    .filter(Boolean);
+
+  if (qTokens.length === 0) return true;
+
+  const shiftLabels = new Set<string>();
+  for (const dk of WEEK_DAYS) {
+    const a = agent.assignments[dk];
+    if (a?.status === 'WORK' && a.shiftId) {
+      const sh = shiftMap.get(a.shiftId);
+      if (sh) shiftLabels.add(sh.label);
+    }
+  }
+
+  const exMeta = agent.preAllocatedException ? EXCEPTION_META[agent.preAllocatedException] : null;
+  const rawFields = [
+    agent.agentName,
+    agent.agentId,
+    `agent#${rowNum}`,
+    `#${rowNum}`,
+    agent.offPatternLabel,
+    exMeta ? `${exMeta.code} ${exMeta.label} ${exMeta.short}` : '',
+    agent.violations.length > 0 ? 'alert violation' : 'valid',
+    ...[...shiftLabels],
+  ]
+    .map(normalizeRosterText)
+    .filter(Boolean);
+
+  const flatBlob = rawFields.join(' ');
+  if (flatBlob.includes(qNorm)) return true;
+
+  const candidateWords = Array.from(
+    new Set(
+      rawFields.flatMap((f) => [
+        f,
+        ...f.split(/[\s\-+/_.,()–]+/).filter(Boolean),
+      ])
+    )
+  );
+
+  return qTokens.every((qt) => {
+    if (qt.startsWith('#') && /^#\d+$/.test(qt)) {
+      return Number(qt.slice(1)) === rowNum;
+    }
+    if (/^\d+$/.test(qt)) {
+      const numVal = Number(qt);
+      return (
+        numVal === rowNum ||
+        candidateWords.some(
+          (cw) =>
+            cw === qt ||
+            cw.startsWith(`${qt.padStart(2, '0')}:`) ||
+            cw.startsWith(`${qt}:`)
+        )
+      );
+    }
+    return candidateWords.some(
+      (cw) =>
+        cw.includes(qt) ||
+        (!/\d/.test(qt) &&
+          !/\d/.test(cw) &&
+          qt.length >= 4 &&
+          cw.length >= 4 &&
+          isWithinEditDistanceOne(qt, cw))
+    );
+  });
+}
+
 export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
   inputMode,
   setInputMode,
@@ -261,22 +413,33 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
     setQuickShiftText('');
   };
 
-  // Filtered roster table rows
+  // Filtered roster table rows preserving original 1-based roster index (#1..#N) + smart fuzzy matching
   const filteredRows = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return scheduleResult.visibleOutputAgents.filter((agent) => {
-      if (q && !agent.agentName.toLowerCase().includes(q) && !agent.offPatternLabel.toLowerCase().includes(q)) {
-        return false;
-      }
-      if (matrixFilter === 'active') return agent.preAllocatedException === null;
-      if (matrixFilter === 'leaves') return agent.preAllocatedException !== null;
-      if (matrixFilter === 'alerts') return agent.violations.length > 0;
-      if (matrixFilter === 'manual') {
-        return WEEK_DAYS.some((dk) => agent.assignments[dk]?.isManualOverride);
-      }
-      return true;
-    });
-  }, [scheduleResult.visibleOutputAgents, searchQuery, matrixFilter]);
+    return scheduleResult.visibleOutputAgents
+      .map((agent, idx) => ({ agent, rowNum: idx + 1 }))
+      .filter(({ agent, rowNum }) => {
+        if (searchQuery.trim() && !matchesSmartRosterSearch(agent, rowNum, searchQuery, shiftMap)) {
+          return false;
+        }
+        if (matrixFilter === 'active') return agent.preAllocatedException === null;
+        if (matrixFilter === 'leaves') return agent.preAllocatedException !== null;
+        if (matrixFilter === 'alerts') return agent.violations.length > 0;
+        if (matrixFilter === 'manual') {
+          return WEEK_DAYS.some((dk) => agent.assignments[dk]?.isManualOverride);
+        }
+        return true;
+      });
+  }, [scheduleResult.visibleOutputAgents, searchQuery, matrixFilter, shiftMap]);
+
+  const maxAgentNameLen = useMemo(
+    () =>
+      scheduleResult.visibleOutputAgents.reduce(
+        (mx, a) => Math.max(mx, a.agentName.trim().length),
+        0
+      ),
+    [scheduleResult.visibleOutputAgents]
+  );
+  const hasLongNames = maxAgentNameLen > 14;
 
   const { summary, dailyTotals, coverageByDay } = scheduleResult;
 
@@ -1396,9 +1559,30 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               <ShiftSchedulerIcon size={22} />
             </ProMaxIconBadge>
             <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Scheduled Coverage vs Next Week Forecast &amp; Arrival Pattern (Mon → Sun)
-              </h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Scheduled Coverage vs Next Week Forecast &amp; Arrival Pattern (Mon → Sun)
+                </h3>
+                <span className="rounded-md border border-sky-500/35 bg-sky-500/10 px-2 py-0.5 text-[10px] font-mono font-bold text-sky-700 dark:text-sky-300">
+                  {erlangConfig.useErlangA ? 'Palm Erlang-A' : 'Erlang C'}
+                </span>
+                {dailyTotals.length > 0 && (() => {
+                  const covMean =
+                    dailyTotals.reduce((s, d) => s + d.coveragePct, 0) / dailyTotals.length;
+                  const covVar =
+                    dailyTotals.reduce((s, d) => s + (d.coveragePct - covMean) ** 2, 0) /
+                    dailyTotals.length;
+                  const covCv = covMean > 0 ? (Math.sqrt(covVar) / covMean) * 100 : 0;
+                  return (
+                    <span className="rounded-md border border-indigo-500/35 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                      7d Balance CV: {covCv.toFixed(1)}%
+                    </span>
+                  );
+                })()}
+                <span className="rounded-md border border-emerald-500/35 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono font-bold text-emerald-700 dark:text-emerald-300">
+                  {summary.validBreakRatePct.toFixed(1)}% Staggered Breaks
+                </span>
+              </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Click any weekday card below to inspect 15/30/60-min interval coverage and live break staggering.
               </p>
@@ -1516,9 +1700,20 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search agent or OFF pair..."
-                className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 text-xs w-48 focus:outline-none focus:border-sky-500"
+                placeholder="Search name, #ID, shift, or OFF..."
+                aria-label="Search agent roster"
+                className="pl-8 pr-7 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 text-xs w-56 focus:outline-none focus:border-sky-500"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Clear roster search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
             <div className="flex items-center gap-1 rounded-xl bg-slate-100 dark:bg-slate-950/70 p-1 border border-slate-200 dark:border-slate-800">
@@ -1571,17 +1766,32 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
         </div>
 
         <div className="overflow-x-auto overflow-y-auto max-h-[620px]">
-          <table className="w-full min-w-[880px] lg:min-w-0 lg:table-fixed text-xs border-collapse">
+          <table className="w-full min-w-[760px] md:min-w-0 table-fixed text-xs border-collapse">
             <thead className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
               <tr>
-                <th className="sticky left-0 z-30 bg-slate-100 dark:bg-slate-950 text-left px-2 py-2 font-bold w-[10%]">
+                <th
+                  className={`sticky left-0 z-30 bg-slate-100 dark:bg-slate-950 text-left px-2 py-2 font-bold ${
+                    hasLongNames ? 'w-[16%]' : 'w-[10.5%]'
+                  }`}
+                >
                   Agent / ID
                 </th>
-                <th className="text-center px-1 py-2 font-bold w-[9%]">OFF / Profile</th>
+                <th
+                  className={`text-center px-1 py-2 font-bold ${
+                    hasLongNames ? 'w-[8.2%]' : 'w-[8.8%]'
+                  }`}
+                >
+                  OFF / Profile
+                </th>
                 {WEEK_DAYS.map((dk) => {
                   const dt = dailyTotals.find((d) => d.dayKey === dk);
                   return (
-                    <th key={dk} className="text-center px-1 py-2 font-bold w-[10.4%]">
+                    <th
+                      key={dk}
+                      className={`text-center px-0.5 xl:px-1 py-2 font-bold ${
+                        hasLongNames ? 'w-[9.9%]' : 'w-[10.5%]'
+                      }`}
+                    >
                       <div>{dk}</div>
                       <div className="text-[10px] font-mono font-normal text-slate-400 truncate">
                         {dt?.dateIso.slice(5)} · {dt?.coveragePct.toFixed(0)}%
@@ -1589,26 +1799,32 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                     </th>
                   );
                 })}
-                <th className="text-center px-1 py-2 font-bold w-[8.2%]">Compliance</th>
+                <th
+                  className={`text-center px-1 py-2 font-bold ${
+                    hasLongNames ? 'w-[6.5%]' : 'w-[7.2%]'
+                  }`}
+                >
+                  Compliance
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
               {filteredRows.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="py-10 text-center text-slate-400">
-                    No agents match this filter. Try switching filter to &quot;All&quot; or increasing headcount.
+                    No agents match this filter. Try clearing the search query or switching filter to &quot;All&quot;.
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((agent) => {
+                filteredRows.map(({ agent, rowNum }) => {
                   const hasAlerts = agent.violations.length > 0;
                   return (
                     <tr
                       key={agent.agentId}
                       className="hover:bg-sky-500/5 transition"
                     >
-                      {/* Sticky Agent Name Column (Inline editable) */}
-                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 px-2 py-1.5 border-r border-slate-100 dark:border-slate-800/80">
+                      {/* Sticky Adaptive Agent Name Column (Inline editable, auto-wraps long names cleanly) */}
+                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 px-2 py-1.5 border-r border-slate-100 dark:border-slate-800/80 align-middle">
                         {editingNameAgentId === agent.agentId ? (
                           <input
                             type="text"
@@ -1626,10 +1842,21 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                               setEditingNameAgentId(agent.agentId);
                               setEditingNameValue(agent.agentName);
                             }}
-                            className="w-full group flex items-center gap-1 text-left font-bold text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 cursor-pointer"
-                            title="Click to rename agent"
+                            className="w-full group flex items-center gap-1.5 text-left font-bold text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 cursor-pointer"
+                            title={`${agent.agentName} (#${rowNum}) — Click to rename`}
                           >
-                            <span className="truncate">{agent.agentName}</span>
+                            <span className="shrink-0 rounded bg-slate-100 dark:bg-slate-800 px-1 py-0.5 text-[9.5px] font-mono font-bold text-slate-500 dark:text-slate-400">
+                              #{rowNum}
+                            </span>
+                            <span
+                              className={`min-w-0 flex-1 whitespace-normal break-words leading-[1.2] text-left ${
+                                agent.agentName.length > 18
+                                  ? 'text-[10.5px] xl:text-[11px]'
+                                  : 'text-[11.5px] xl:text-xs'
+                              }`}
+                            >
+                              {agent.agentName}
+                            </span>
                             <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-75 transition shrink-0" />
                           </button>
                         )}

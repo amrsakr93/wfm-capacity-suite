@@ -15,11 +15,14 @@ import {
 import { buildSchedulingWorkbook } from '../src/engine/exporter.ts';
 import {
   buildSampleDailyHistory,
+  buildIntervalInputsForGranularity,
   DEFAULT_30M_CURVES,
   DEFAULT_DOW_SHARES,
 } from '../src/engine/samples.ts';
+import { buildWhatIfMatrix } from '../src/engine/capacity.ts';
 import { runForecastingStudio, buildFutureHorizonSummary } from '../src/engine/forecasting.ts';
 import type {
+  CapacityConfig,
   DayKey,
   ErlangConfig,
   ForecastConfig,
@@ -576,5 +579,85 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
     const night00 = res.shiftDailyMix.find((m) => m.shiftId === '00:00-09:00');
     assert.ok(night00 && night00.avgPerDay <= 2.5);
     assert.ok(res.summary.projectedWeeklySlPct >= 75);
+  });
+
+  it('honors Palm Erlang-A abandonment modeling in recalculateScheduleCoverage under tight staffing', () => {
+    const tightRes = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 36,
+      namedAgents: [],
+      leaveCounts: { annual: 0, maternity: 0, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: DEFAULT_SHIFT_CATALOG,
+      rules: DEFAULT_SCHEDULING_RULES,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    const commonArgs = {
+      agents: tightRes.agents,
+      shiftCatalog: DEFAULT_SHIFT_CATALOG,
+      rules: DEFAULT_SCHEDULING_RULES,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+    };
+
+    const strictC = recalculateScheduleCoverage({
+      ...commonArgs,
+      erlangConfig: { ...DEFAULT_ERLANG, useErlangA: false },
+    });
+    const palmA = recalculateScheduleCoverage({
+      ...commonArgs,
+      erlangConfig: { ...DEFAULT_ERLANG, useErlangA: true, avgPatienceSec: 120 },
+    });
+
+    assert.ok(
+      palmA.summary.projectedWeeklySlPct > strictC.summary.projectedWeeklySlPct,
+      `Expected Erlang-A SL (${palmA.summary.projectedWeeklySlPct}%) > strict Erlang-C SL (${strictC.summary.projectedWeeklySlPct}%) under tight staffing`
+    );
+  });
+
+  it('maintains smooth continuous AHT sensitivity in buildWhatIfMatrix anchored to custom Cap Plan hours', () => {
+    const intervalInputs = buildIntervalInputsForGranularity(DEFAULT_30M_CURVES.Mon, 30);
+    const customCapCfg: CapacityConfig = {
+      route: 'erlang_c',
+      erlangProductiveHoursPerDay: 312,
+      pureTalkHoursPerDay: 226.58,
+      flatTargetOccupancyPct: 85,
+      useShiftMinusBreak: true,
+      grossShiftHours: 9,
+      unpaidBreakHours: 1,
+      paidShiftHoursDirect: 8,
+      operatingDaysPerWeek: 7,
+      agentWorkdaysPerWeek: 5,
+      scheduleInefficiencyPct: 10,
+      inOfficeBreakdown: {
+        trainingCoachingPct: 1.5,
+        meetingsHuddlesPct: 1.0,
+        systemDowntimePct: 0.5,
+        paidBreaksPct: 0,
+      },
+      outOfOfficeBreakdown: {
+        annualLeavePct: 10,
+        sickLeavePct: 5,
+        publicHolidaysPct: 4,
+        unplannedAbsencePct: 3,
+      },
+      attritionRampBufferPct: 0,
+    };
+
+    const ahtDeltas = [-10, 0, 10];
+    const shrinkDeltas = [-2, 0, 2];
+    const matrix = buildWhatIfMatrix(intervalInputs, DEFAULT_ERLANG, customCapCfg, ahtDeltas, shrinkDeltas);
+
+    const rowNeg = matrix[0];
+    const rowBase = matrix[1];
+    const rowPos = matrix[2];
+    const baseCell = rowBase[1];
+
+    assert.equal(baseCell.deltaFte, 0);
+    assert.ok(rowNeg[1].finalGrossFte < baseCell.finalGrossFte, `Expected -10s AHT FTE (${rowNeg[1].finalGrossFte}) < base (${baseCell.finalGrossFte})`);
+    assert.ok(rowPos[1].finalGrossFte > baseCell.finalGrossFte, `Expected +10s AHT FTE (${rowPos[1].finalGrossFte}) > base (${baseCell.finalGrossFte})`);
+    assert.ok(rowBase[0].finalGrossFte < baseCell.finalGrossFte && rowBase[2].finalGrossFte > baseCell.finalGrossFte);
   });
 });

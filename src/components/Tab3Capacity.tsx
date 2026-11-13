@@ -66,11 +66,7 @@ export const Tab3Capacity: React.FC<Props> = ({
   const dailyOfferedFromMonth = monthlyVolume / safeDays;
   const hourlyVolFromMonth = dailyOfferedFromMonth / safeHoops;
 
-  const liveHourlySolved = solveRequiredAgents(hourlyVolFromMonth, erlangConfig.globalAhtSec, 3600, {
-    ...erlangConfig,
-    enforceMaxAsa: false,
-    enforceOccupancyCap: false,
-  });
+  const liveHourlySolved = solveRequiredAgents(hourlyVolFromMonth, erlangConfig.globalAhtSec, 3600, erlangConfig);
 
   const reqPerHourFromMonth =
     erlangConfig.agentMode === 'fractional'
@@ -87,11 +83,7 @@ export const Tab3Capacity: React.FC<Props> = ({
   ) => {
     const dOff = nextMonthly / Math.max(1, nextDays);
     const hOff = dOff / Math.max(1, Math.min(24, nextHoops));
-    const solved = solveRequiredAgents(hOff, nextErlang.globalAhtSec, 3600, {
-      ...nextErlang,
-      enforceMaxAsa: false,
-      enforceOccupancyCap: false,
-    });
+    const solved = solveRequiredAgents(hOff, nextErlang.globalAhtSec, 3600, nextErlang);
     const reqHr =
       nextErlang.agentMode === 'fractional' ? solved.fractionalSeats : solved.integerSeats;
     const prodHrsDay = reqHr * Math.max(1, Math.min(24, nextHoops));
@@ -490,6 +482,34 @@ export const Tab3Capacity: React.FC<Props> = ({
                 ({finalCapPlanAgentsExact.toFixed(2)})
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* WFM Queuing & Statistical Diagnostics Strip (Halfin-Whitt QED + Compound Shrinkage) */}
+        <div className="mt-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-2 lg:grid-cols-4 gap-2 text-[11px]">
+          <div className="rounded-lg bg-white/75 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800 px-2.5 py-1.5 flex items-center justify-between gap-2">
+            <span className="text-slate-500 dark:text-slate-400">Erlang Queuing Eff. (η)</span>
+            <strong className="font-mono tabular-nums text-sky-700 dark:text-sky-300">
+              {((config.pureTalkHoursPerDay / Math.max(0.1, result.baseRequiredProductiveHoursPerDay)) * 100).toFixed(1)}%
+            </strong>
+          </div>
+          <div className="rounded-lg bg-white/75 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800 px-2.5 py-1.5 flex items-center justify-between gap-2">
+            <span className="text-slate-500 dark:text-slate-400">Halfin-Whitt QED (β)</span>
+            <strong className="font-mono tabular-nums text-indigo-700 dark:text-indigo-300">
+              {((liveHourlySolved.fractionalSeats - liveHourlySolved.metrics.erlangs) / Math.max(0.1, Math.sqrt(liveHourlySolved.metrics.erlangs))).toFixed(2)}√A
+            </strong>
+          </div>
+          <div className="rounded-lg bg-white/75 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800 px-2.5 py-1.5 flex items-center justify-between gap-2">
+            <span className="text-slate-500 dark:text-slate-400">Shrinkage Multiplier</span>
+            <strong className="font-mono tabular-nums text-amber-700 dark:text-amber-300">
+              ×{(1 / Math.max(0.05, 1 - result.compoundTotalShrinkagePct / 100)).toFixed(3)}
+            </strong>
+          </div>
+          <div className="rounded-lg bg-white/75 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800 px-2.5 py-1.5 flex items-center justify-between gap-2">
+            <span className="text-slate-500 dark:text-slate-400">Gross-to-Talk Factor</span>
+            <strong className="font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+              ×{result.effectiveMultiplierOverPureTalk.toFixed(2)}
+            </strong>
           </div>
         </div>
       </div>
