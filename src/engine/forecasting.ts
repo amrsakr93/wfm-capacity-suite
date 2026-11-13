@@ -68,6 +68,138 @@ export function computeAccuracyMetrics(actuals: number[], preds: number[]): Fore
   };
 }
 
+function getUtcDayIdx(dateIso?: string): number | null {
+  if (!dateIso || !/^\d{4}-\d{2}-\d{2}/.test(dateIso)) return null;
+  const ms = Date.parse(`${dateIso.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(ms) ? null : new Date(ms).getUTCDay();
+}
+
+function calcMedian(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Computes a seasonality-aware smoothed replacement value for a flagged outlier point
+ * from clean (non-excluded, non-smoothed) same-weekday neighbors, falling back to adjacent rows.
+ */
+export function estimateSmoothedPointVolume(points: HistoricalPoint[], idx: number): number {
+  const pt = points[idx];
+  if (!pt) return 0;
+  const dow = getUtcDayIdx(pt.date);
+
+  if (dow !== null) {
+    const sameWeekday = points
+      .map((nb, j) => ({ nb, dist: Math.abs(j - idx), nbDow: getUtcDayIdx(nb.date) }))
+      .filter((x) => x.nb !== pt && !x.nb.isExcluded && !x.nb.isSmoothed && x.nbDow === dow)
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 4);
+    if (sameWeekday.length > 0) {
+      const avg = sameWeekday.reduce((s, x) => s + x.nb.volume, 0) / sameWeekday.length;
+      return Math.max(0, Math.round(avg));
+    }
+  }
+
+  // Index-based +/-7, +/-14 same-position weekly neighbors before immediate neighbors
+  for (const group of [[-7, 7, -14, 14], [-1, 1, -2, 2]]) {
+    const vals: number[] = [];
+    for (const off of group) {
+      const nb = points[idx + off];
+      if (nb && !nb.isExcluded && !nb.isSmoothed) vals.push(nb.volume);
+    }
+    if (vals.length > 0) {
+      return Math.max(0, Math.round(vals.reduce((a, b) => a + b, 0) / vals.length));
+    }
+  }
+  return Math.max(0, Math.round(pt.volume));
+}
+
+/**
+ * Automatically flags statistical outliers (technical outages, extreme spikes, or public holidays)
+ * using seasonal weekday-aware leave-one-out Median & MAD so normal weekend dips (Sat/Sun) are preserved.
+ */
+export function autoDetectOutliers(
+  points: HistoricalPoint[],
+  periodicity: Periodicity = 'daily'
+): HistoricalPoint[] {
+  if (points.length < 7) return points;
+
+  const dayGroups = new Map<number, number[]>();
+  points.forEach((pt, idx) => {
+    const dow = periodicity === 'daily' ? getUtcDayIdx(pt.date) : null;
+    if (dow !== null) {
+      const arr = dayGroups.get(dow) ?? [];
+      arr.push(idx);
+      dayGroups.set(dow, arr);
+    }
+  });
+
+  const flagged = new Set<number>();
+
+  for (let i = 0; i < points.length; i++) {
+    const pt = points[i];
+    const dow = periodicity === 'daily' ? getUtcDayIdx(pt.date) : null;
+    const weekdayIndices = dow !== null ? (dayGroups.get(dow) ?? []) : [];
+
+    let peerVolumes: number[] = [];
+    let useWeekdayBaseline = false;
+
+    if (weekdayIndices.length >= 3) {
+      peerVolumes = weekdayIndices.filter((j) => j !== i).map((j) => points[j].volume);
+      useWeekdayBaseline = true;
+    } else {
+      // Short daily (<14d) or weekly/monthly series: compare against local neighborhood window
+      const lo = Math.max(0, i - 6);
+      const hi = Math.min(points.length - 1, i + 6);
+      for (let j = lo; j <= hi; j++) {
+        if (j !== i) peerVolumes.push(points[j].volume);
+      }
+    }
+
+    if (peerVolumes.length < 2) continue;
+    const med = calcMedian(peerVolumes);
+    if (med <= 0) continue;
+
+    const mad = calcMedian(peerVolumes.map((v) => Math.abs(v - med)));
+    const scale = Math.max(mad * 1.4826, med * (useWeekdayBaseline ? 0.1 : 0.14));
+    const robustZ = Math.abs(pt.volume - med) / scale;
+    const relDiff = Math.abs(pt.volume - med) / med;
+
+    if (useWeekdayBaseline) {
+      // Catches holiday/outage drops (<=50% of normal same weekday) and major spikes/anomalies
+      if (pt.volume <= med * 0.5 || (robustZ >= 3.0 && relDiff >= 0.35)) {
+        flagged.add(i);
+      }
+    } else {
+      // Conservative for short undated/monthly series to avoid flagging natural weekends (<14d)
+      if (periodicity !== 'daily') {
+        if (pt.volume <= med * 0.45 || (robustZ >= 3.2 && relDiff >= 0.4)) {
+          flagged.add(i);
+        }
+      } else if (pt.volume <= med * 0.2 || (robustZ >= 4.0 && relDiff >= 0.65)) {
+        flagged.add(i);
+      }
+    }
+  }
+
+  if (flagged.size === 0) {
+    return points.map((pt) => ({ ...pt, isSmoothed: false, smoothedVolume: undefined }));
+  }
+
+  const preFlagged = points.map((pt, i) => ({
+    ...pt,
+    isExcluded: false,
+    isSmoothed: flagged.has(i),
+    smoothedVolume: undefined,
+  }));
+
+  return preFlagged.map((pt, i) =>
+    pt.isSmoothed ? { ...pt, smoothedVolume: estimateSmoothedPointVolume(preFlagged, i) } : pt
+  );
+}
+
 /**
  * Applies user's Outlier & Holiday exclusions or smoothing before model calibration.
  */
@@ -80,19 +212,7 @@ export function prepareCleanedSeries(points: HistoricalPoint[]): number[] {
       if (pt.smoothedVolume != null && Number.isFinite(pt.smoothedVolume)) {
         out.push(Math.max(0, pt.smoothedVolume));
       } else {
-        // Auto smooth from clean neighbors +/-7 days (same weekday) or immediate neighbors
-        const candidates: number[] = [];
-        for (const offset of [-7, 7, -1, 1]) {
-          const nb = points[i + offset];
-          if (nb && !nb.isExcluded && !nb.isSmoothed) {
-            candidates.push(nb.volume);
-          }
-        }
-        const avg =
-          candidates.length > 0
-            ? candidates.reduce((a, b) => a + b, 0) / candidates.length
-            : pt.volume;
-        out.push(Math.max(0, Math.round(avg)));
+        out.push(estimateSmoothedPointVolume(points, i));
       }
     } else {
       out.push(Math.max(0, pt.volume));

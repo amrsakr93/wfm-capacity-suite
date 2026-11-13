@@ -1,7 +1,26 @@
 import * as XLSX from 'xlsx';
 import type { DayKey, HistoricalPoint, IntervalGranularityMin, ParsedDataset } from './types.ts';
 import { generateTimeLabels } from './erlang.ts';
+import { autoDetectOutliers } from './forecasting.ts';
 import { buildDateSpecificCurve, buildDefaultByDateCurves, DEFAULT_30M_CURVES } from './samples.ts';
+
+function computeCleanedDowShares(dailySeries: HistoricalPoint[]): Record<DayKey, number> | undefined {
+  if (!dailySeries.some((d) => Boolean(d.date))) return undefined;
+  const daySumByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
+  const dayCountByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
+  for (const pt of dailySeries) {
+    if (!pt.date || pt.isExcluded) continue;
+    const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
+    const dk = JS_DAY_TO_KEY[jsDay];
+    const vol = pt.isSmoothed && pt.smoothedVolume != null ? pt.smoothedVolume : pt.volume;
+    daySumByKey[dk] += vol;
+    dayCountByKey[dk] += 1;
+  }
+  const avgPerDay = DAY_KEYS.map((d) => (dayCountByKey[d] > 0 ? daySumByKey[d] / dayCountByKey[d] : 0));
+  const avgSum = avgPerDay.reduce((a, b) => a + b, 0);
+  if (avgSum <= 0) return undefined;
+  return Object.fromEntries(DAY_KEYS.map((d, i) => [d, (avgPerDay[i] / avgSum) * 100])) as Record<DayKey, number>;
+}
 
 const DAY_KEYS: DayKey[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const JS_DAY_TO_KEY: DayKey[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -372,12 +391,14 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
     }
 
     const sortedDates = [...dateTotals.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-    const dailySeries: HistoricalPoint[] = sortedDates.map(([iso, vol], i) => ({
+    const rawDailySeries: HistoricalPoint[] = sortedDates.map(([iso, vol], i) => ({
       id: `pt-${i}`,
       label: iso,
       date: iso,
       volume: Math.round(vol),
     }));
+    const dailySeries = autoDetectOutliers(rawDailySeries, 'daily');
+    const smoothedCount = dailySeries.filter((p) => p.isSmoothed).length;
 
     const normCurves = normalizeCurves(accum, granularity);
     const byDateCurves: Record<string, number[]> = {};
@@ -393,19 +414,7 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
         totalVol > 0 ? vols.map((v) => (v / totalVol) * 100) : [...normCurves[dk]];
     }
 
-    const daySumByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
-    const dayCountByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
-    for (const pt of dailySeries) {
-      const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
-      const dk = JS_DAY_TO_KEY[jsDay];
-      daySumByKey[dk] += pt.volume;
-      dayCountByKey[dk] += 1;
-    }
-    const avgPerDay = DAY_KEYS.map((d) => (dayCountByKey[d] > 0 ? daySumByKey[d] / dayCountByKey[d] : 0));
-    const avgSum = avgPerDay.reduce((a, b) => a + b, 0) || 1;
-    const dayOfWeekShares = Object.fromEntries(
-      DAY_KEYS.map((d, i) => [d, (avgPerDay[i] / avgSum) * 100])
-    ) as Record<DayKey, number>;
+    const dayOfWeekShares = computeCleanedDowShares(dailySeries);
 
     return {
       format: 'crosstab_pivot',
@@ -418,7 +427,7 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       byDateVolumes,
       byDateTotals,
       timeLabels: generateTimeLabels(granularity),
-      summaryNote: `Detected Cross-Tab Pivot (${sortedDates.length} dates × ${granularity}m intervals). Populated Forecasting series & exact per-date arrival curves.`,
+      summaryNote: `Detected Cross-Tab Pivot (${sortedDates.length} dates × ${granularity}m intervals). Populated Forecasting series & exact per-date arrival curves.${smoothedCount > 0 ? ` Auto-smoothed ${smoothedCount} outlier/holiday day(s).` : ''}`,
     };
   }
 
@@ -450,7 +459,7 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
       >;
       const byDateVolumes: Record<string, number[]> = {};
       const byDateTotals: Record<string, number> = {};
-      const dailySeries: HistoricalPoint[] = [...grouped.entries()]
+      const rawDailySeries: HistoricalPoint[] = [...grouped.entries()]
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([iso, entries], i) => {
           const dk = JS_DAY_TO_KEY[new Date(`${iso}T00:00:00Z`).getUTCDay()];
@@ -467,6 +476,9 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
           return { id: `pt-${i}`, label: iso, date: iso, volume: Math.round(sum) };
         });
 
+      const dailySeries = autoDetectOutliers(rawDailySeries, 'daily');
+      const smoothedCount = dailySeries.filter((p) => p.isSmoothed).length;
+
       const normCurves = normalizeCurves(accum, granularity);
       const byDateCurves: Record<string, number[]> = {};
       for (const pt of dailySeries) {
@@ -477,22 +489,7 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
         byDateCurves[pt.date] = tot > 0 ? vols.map((v) => (v / tot) * 100) : [...normCurves[dk]];
       }
 
-      const daySumByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
-      const dayCountByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
-      for (const pt of dailySeries) {
-        if (!pt.date) continue;
-        const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
-        const dk = JS_DAY_TO_KEY[jsDay];
-        daySumByKey[dk] += pt.volume;
-        dayCountByKey[dk] += 1;
-      }
-      const avgPerDay = DAY_KEYS.map((d) =>
-        dayCountByKey[d] > 0 ? daySumByKey[d] / dayCountByKey[d] : 0
-      );
-      const avgSum = avgPerDay.reduce((a, b) => a + b, 0) || 1;
-      const dayOfWeekShares = Object.fromEntries(
-        DAY_KEYS.map((d, i) => [d, (avgPerDay[i] / avgSum) * 100])
-      ) as Record<DayKey, number>;
+      const dayOfWeekShares = computeCleanedDowShares(dailySeries);
 
       return {
         format: 'long_interval',
@@ -505,7 +502,7 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
         byDateVolumes,
         byDateTotals,
         timeLabels: generateTimeLabels(granularity),
-        summaryNote: `Detected Long Interval table (${dailySeries.length} days, ${granularity}m).`,
+        summaryNote: `Detected Long Interval table (${dailySeries.length} days, ${granularity}m).${smoothedCount > 0 ? ` Auto-smoothed ${smoothedCount} outlier/holiday day(s).` : ''}`,
       };
     }
   }
@@ -549,40 +546,24 @@ export function parseMatrixToDataset(matrix: unknown[][]): ParsedDataset {
     else if (diffDays >= 6) periodicityGuess = 'weekly';
   }
 
+  const cleanedSeriesPts = autoDetectOutliers(dailySeries, periodicityGuess);
+  const smoothedCount = cleanedSeriesPts.filter((p) => p.isSmoothed).length;
+
   // Build per-date curves & DOW shares when daily dates are present
-  const generated = buildDefaultByDateCurves(dailySeries, DEFAULT_30M_CURVES);
-  let dayOfWeekShares: Record<DayKey, number> | undefined;
-  if (periodicityGuess === 'daily' && dailySeries.some((d) => Boolean(d.date))) {
-    const daySumByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
-    const dayCountByKey = Object.fromEntries(DAY_KEYS.map((d) => [d, 0])) as Record<DayKey, number>;
-    for (const pt of dailySeries) {
-      if (!pt.date) continue;
-      const jsDay = new Date(`${pt.date}T00:00:00Z`).getUTCDay();
-      const dk = JS_DAY_TO_KEY[jsDay];
-      daySumByKey[dk] += pt.volume;
-      dayCountByKey[dk] += 1;
-    }
-    const avgPerDay = DAY_KEYS.map((d) =>
-      dayCountByKey[d] > 0 ? daySumByKey[d] / dayCountByKey[d] : 0
-    );
-    const avgSum = avgPerDay.reduce((a, b) => a + b, 0);
-    if (avgSum > 0) {
-      dayOfWeekShares = Object.fromEntries(
-        DAY_KEYS.map((d, i) => [d, (avgPerDay[i] / avgSum) * 100])
-      ) as Record<DayKey, number>;
-    }
-  }
+  const generated = buildDefaultByDateCurves(cleanedSeriesPts, DEFAULT_30M_CURVES);
+  const dayOfWeekShares =
+    periodicityGuess === 'daily' ? computeCleanedDowShares(cleanedSeriesPts) : undefined;
 
   return {
     format: 'simple_daily',
     periodicityGuess,
-    dailySeries,
+    dailySeries: cleanedSeriesPts,
     granularityMinGuess: 30,
     dayOfWeekShares,
     byDateCurves:
       Object.keys(generated.byDateCurves).length > 0 ? generated.byDateCurves : undefined,
     byDateTotals: Object.keys(byDateTotals).length > 0 ? byDateTotals : generated.byDateTotals,
-    summaryNote: `Parsed ${dailySeries.length} ${periodicityGuess} periods.`,
+    summaryNote: `Parsed ${cleanedSeriesPts.length} ${periodicityGuess} periods.${smoothedCount > 0 ? ` Auto-smoothed ${smoothedCount} outlier/holiday day(s).` : ''}`,
   };
 }
 

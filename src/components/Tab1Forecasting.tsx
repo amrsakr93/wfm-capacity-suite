@@ -25,7 +25,11 @@ import type {
   ParsedDataset,
 } from '../engine/types.ts';
 import { parseFileDataset, parseTextDataset } from '../engine/parsers.ts';
-import { buildFutureHorizonSummary } from '../engine/forecasting.ts';
+import {
+  autoDetectOutliers,
+  buildFutureHorizonSummary,
+  estimateSmoothedPointVolume,
+} from '../engine/forecasting.ts';
 import { buildDateSpecificCurve } from '../engine/samples.ts';
 import { SmartNumberInput } from './SmartNumberInput.tsx';
 import { InteractiveForecastChart, InteractiveArrivalBarChart } from './InteractiveCharts.tsx';
@@ -388,19 +392,53 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
   };
 
   const togglePointFlag = (id: string, field: 'isExcluded' | 'isSmoothed') => {
-    setHistory((prev) =>
-      prev.map((pt) => {
+    setHistory((prev) => {
+      const toggled = prev.map((pt) => {
         if (pt.id !== id) return pt;
         const nextVal = !pt[field];
         return {
           ...pt,
           [field]: nextVal,
-          ...(field === 'isExcluded' && nextVal ? { isSmoothed: false } : {}),
+          smoothedVolume: field === 'isSmoothed' && !nextVal ? undefined : pt.smoothedVolume,
+          ...(field === 'isExcluded' && nextVal
+            ? { isSmoothed: false, smoothedVolume: undefined }
+            : {}),
           ...(field === 'isSmoothed' && nextVal ? { isExcluded: false } : {}),
         };
-      })
+      });
+      return toggled.map((pt, i) =>
+        pt.id === id && pt.isSmoothed && pt.smoothedVolume == null
+          ? { ...pt, smoothedVolume: estimateSmoothedPointVolume(toggled, i) }
+          : pt
+      );
+    });
+  };
+
+  const handleRunAutoOutliers = () => {
+    const next = autoDetectOutliers(history, config.periodicity);
+    const found = next.filter((p) => p.isSmoothed).length;
+    setHistory(next);
+    if (found > 0) setShowOutlierTable(true);
+    setImportNotice(
+      found > 0
+        ? `Auto-detected and smoothed ${found} outlier / holiday observation(s) using seasonal peer medians.`
+        : 'No extreme statistical outliers detected against seasonal weekday peers.'
     );
   };
+
+  const handleResetCleanFlags = () => {
+    setHistory((prev) =>
+      prev.map((pt) => ({
+        ...pt,
+        isSmoothed: false,
+        isExcluded: false,
+        smoothedVolume: undefined,
+      }))
+    );
+  };
+
+  const smoothedCount = history.filter((p) => p.isSmoothed).length;
+  const excludedCount = history.filter((p) => p.isExcluded).length;
 
   const winnerMeta = ALL_12_MODEL_META[output.bestModelId] ?? ALL_12_MODEL_META.holt_winters_mult;
   const activeMeta = ALL_12_MODEL_META[activeModel.modelId] ?? ALL_12_MODEL_META.holt_winters_mult;
@@ -1279,76 +1317,135 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
 
       {/* Collapsible Outlier & Holiday Cleaner */}
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-xs">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-              Outlier &amp; Holiday Data Cleaner ({history.length} observations)
-            </h3>
-            <p className="text-[11px] text-slate-500">
-              Optional: Flag technical outages or public holidays to smooth or exclude them before training.
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                Outlier &amp; Holiday Data Cleaner ({history.length} observations)
+              </h3>
+              {smoothedCount > 0 && (
+                <span className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-300">
+                  {smoothedCount} Auto-Smoothed
+                </span>
+              )}
+              {excludedCount > 0 && (
+                <span className="inline-flex items-center rounded-full bg-rose-500/15 border border-rose-500/40 px-2 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-300">
+                  {excludedCount} Excluded
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Holidays &amp; outages are auto-detected on import using same-weekday seasonal baselines. Adjust or toggle rows manually anytime.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowOutlierTable((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-          >
-            {showOutlierTable ? 'Hide Historical Rows' : 'Manage Outliers / Holidays'}
-            {showOutlierTable ? (
-              <ChevronUp className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronDown className="w-3.5 h-3.5" />
+          <div className="flex flex-wrap items-center gap-2 no-print">
+            <button
+              type="button"
+              onClick={handleRunAutoOutliers}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/35 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Auto-Detect Outliers
+            </button>
+            {(smoothedCount > 0 || excludedCount > 0) && (
+              <button
+                type="button"
+                onClick={handleResetCleanFlags}
+                className="inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                Reset Flags
+              </button>
             )}
-          </button>
+            <button
+              type="button"
+              onClick={() => setShowOutlierTable((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              {showOutlierTable ? 'Hide Historical Rows' : 'Manage Outliers / Holidays'}
+              {showOutlierTable ? (
+                <ChevronUp className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronDown className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </div>
         </div>
 
         {showOutlierTable && (
-          <div className="mt-3 max-h-60 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl">
+          <div className="mt-3 max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl">
             <table className="w-full text-left border-collapse text-xs">
               <thead className="sticky top-0 bg-slate-100 dark:bg-slate-950 text-slate-500">
                 <tr>
                   <th className="py-2 px-3">#</th>
                   <th className="py-2 px-3">Date / Period</th>
                   <th className="py-2 px-3 text-right">Raw Volume</th>
+                  <th className="py-2 px-3 text-right">Training Value</th>
                   <th className="py-2 px-3 text-center">Holiday / Outage Handling</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60">
-                {history.map((pt, idx) => (
-                  <tr key={pt.id}>
-                    <td className="py-1.5 px-3 font-mono text-slate-400">{idx + 1}</td>
-                    <td className="py-1.5 px-3 font-mono">{pt.label}</td>
-                    <td className="py-1.5 px-3 text-right tabular-nums font-medium">
-                      {pt.volume.toLocaleString()}
-                    </td>
-                    <td className="py-1.5 px-3 text-center">
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => togglePointFlag(pt.id, 'isSmoothed')}
-                          className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
-                            pt.isSmoothed
-                              ? 'bg-amber-500/20 border-amber-500/50 text-amber-600 dark:text-amber-300'
-                              : 'border-slate-300 dark:border-slate-700 text-slate-500'
-                          }`}
-                        >
-                          Smooth
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => togglePointFlag(pt.id, 'isExcluded')}
-                          className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
-                            pt.isExcluded
-                              ? 'bg-rose-500/20 border-rose-500/50 text-rose-600 dark:text-rose-300'
-                              : 'border-slate-300 dark:border-slate-700 text-slate-500'
-                          }`}
-                        >
-                          Exclude
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {history.map((pt, idx) => {
+                  const effVol = pt.isExcluded
+                    ? null
+                    : pt.isSmoothed
+                      ? (pt.smoothedVolume ?? estimateSmoothedPointVolume(history, idx))
+                      : pt.volume;
+                  return (
+                    <tr
+                      key={pt.id}
+                      className={
+                        pt.isSmoothed
+                          ? 'bg-amber-500/5'
+                          : pt.isExcluded
+                            ? 'bg-rose-500/5 opacity-60'
+                            : ''
+                      }
+                    >
+                      <td className="py-1.5 px-3 font-mono text-slate-400">{idx + 1}</td>
+                      <td className="py-1.5 px-3 font-mono">{pt.label}</td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-medium">
+                        {pt.volume.toLocaleString()}
+                      </td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-semibold">
+                        {effVol === null ? (
+                          <span className="text-rose-500 dark:text-rose-300">Excluded</span>
+                        ) : pt.isSmoothed ? (
+                          <span className="text-amber-600 dark:text-amber-300">
+                            → {effVol.toLocaleString()}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">{effVol.toLocaleString()}</span>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-3 text-center">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => togglePointFlag(pt.id, 'isSmoothed')}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
+                              pt.isSmoothed
+                                ? 'bg-amber-500/20 border-amber-500/50 text-amber-600 dark:text-amber-300'
+                                : 'border-slate-300 dark:border-slate-700 text-slate-500'
+                            }`}
+                          >
+                            Smooth
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => togglePointFlag(pt.id, 'isExcluded')}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium border cursor-pointer ${
+                              pt.isExcluded
+                                ? 'bg-rose-500/20 border-rose-500/50 text-rose-600 dark:text-rose-300'
+                                : 'border-slate-300 dark:border-slate-700 text-slate-500'
+                            }`}
+                          >
+                            Exclude
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

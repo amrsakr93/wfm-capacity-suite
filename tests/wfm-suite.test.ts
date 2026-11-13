@@ -10,7 +10,13 @@ import {
   generateTimeLabels,
 } from '../src/engine/erlang.ts';
 import { calculateCapacityWaterfall, buildWhatIfMatrix } from '../src/engine/capacity.ts';
-import { runForecastingStudio, fitOLS, buildFutureHorizonSummary } from '../src/engine/forecasting.ts';
+import {
+  runForecastingStudio,
+  fitOLS,
+  buildFutureHorizonSummary,
+  autoDetectOutliers,
+  prepareCleanedSeries,
+} from '../src/engine/forecasting.ts';
 import { parseTextDataset } from '../src/engine/parsers.ts';
 import {
   buildSampleDailyHistory,
@@ -596,6 +602,59 @@ describe('Styled Executive Dashboard Excel Exports (All 3 Workbooks)', () => {
     assert.ok(String(dash.getCell('K6').value).includes('79 Agents'));
   });
 });
+
+describe('Automatic Seasonal Outlier Detection & Smoothing on Uploaded Data', () => {
+  it('auto-flags holiday/outage drops while preserving normal weekend dips (Sun/Sat)', () => {
+    const start = new Date('2025-06-01T00:00:00Z'); // Sunday
+    // Sun..Sat baseline matching contact center pattern (~1433 Sun, ~3325 Mon, ~2724 Wed, ~2800 Thu, ~1900 Fri, ~1250 Sat)
+    const dowBase: Record<number, number> = {
+      0: 1433, // Sun
+      1: 3325, // Mon
+      2: 3189, // Tue
+      3: 2724, // Wed
+      4: 2810, // Thu
+      5: 1920, // Fri
+      6: 1260, // Sat
+    };
+    const rows = ['Date\tVolume'];
+    for (let i = 0; i < 57; i++) {
+      const d = new Date(start.getTime() + i * 86400000);
+      const iso = d.toISOString().slice(0, 10);
+      let vol = dowBase[d.getUTCDay()];
+      // Two holiday anomalies matching user's reported pattern (2025-06-05 Thu & 2025-06-06 Fri)
+      if (iso === '2025-06-05') vol = 639;
+      if (iso === '2025-06-06') vol = 270;
+      rows.push(`${iso}\t${vol}`);
+    }
+
+    const parsed = parseTextDataset(rows.join('\n'));
+    assert.equal(parsed.dailySeries.length, 57);
+    const ptSun = parsed.dailySeries.find((p) => p.date === '2025-06-01')!;
+    const ptThu = parsed.dailySeries.find((p) => p.date === '2025-06-05')!;
+    const ptFri = parsed.dailySeries.find((p) => p.date === '2025-06-06')!;
+    const ptSat = parsed.dailySeries.find((p) => p.date === '2025-06-07')!;
+
+    assert.equal(ptSun.isSmoothed, false, 'Normal Sunday must NOT be falsely flagged');
+    assert.equal(ptSat.isSmoothed, false, 'Normal Saturday must NOT be falsely flagged');
+    assert.equal(ptThu.isSmoothed, true, '2025-06-05 Thu holiday (639) must auto-flag Smooth');
+    assert.equal(ptFri.isSmoothed, true, '2025-06-06 Fri holiday (270) must auto-flag Smooth');
+    assert.ok((ptThu.smoothedVolume ?? 0) > 2200, `Expected Thu smoothed near ~2810, got ${ptThu.smoothedVolume}`);
+    assert.ok((ptFri.smoothedVolume ?? 0) > 1500, `Expected Fri smoothed near ~1920, got ${ptFri.smoothedVolume}`);
+    assert.ok(parsed.summaryNote.includes('Auto-smoothed 2'), `Expected summaryNote to report 2 auto-smoothed, got: ${parsed.summaryNote}`);
+
+    const cleaned = prepareCleanedSeries(parsed.dailySeries);
+    assert.equal(cleaned[4], ptThu.smoothedVolume);
+    assert.equal(cleaned[5], ptFri.smoothedVolume);
+  });
+
+  it('produces zero false positives on clean seasonal daily history', () => {
+    const clean = buildSampleDailyHistory();
+    const detected = autoDetectOutliers(clean, 'daily');
+    const flagged = detected.filter((p) => p.isSmoothed || p.isExcluded);
+    assert.equal(flagged.length, 0);
+  });
+});
+
 
 
 
