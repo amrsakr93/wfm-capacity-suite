@@ -230,11 +230,11 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             onClick={() => setShowSeries((s) => ({ ...s, holdout: !s.holdout }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               showSeries.holdout
-                ? 'border-[#0D826E]/35 bg-[#0D826E]/10 text-[#0D826E] dark:border-[#00C389]/50 dark:bg-[#00C389]/15 dark:text-[#00C389]'
+                ? 'border-[#1d4ed8]/35 bg-[#1d4ed8]/10 text-[#1d4ed8] dark:border-[#00C389]/50 dark:bg-[#00C389]/15 dark:text-[#00C389]'
                 : 'border-slate-300 dark:border-slate-700/50 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-full bg-[#0D826E] dark:bg-[#00C389] inline-block" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#1d4ed8] dark:bg-[#00C389] inline-block" />
             Holdout Backtest (20%)
           </button>
 
@@ -243,11 +243,11 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             onClick={() => setShowSeries((s) => ({ ...s, future: !s.future }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               showSeries.future
-                ? 'border-[#0D9488]/40 bg-[#0D9488]/10 text-[#0F766E] dark:border-[#25E2CC]/60 dark:bg-[#25E2CC]/15 dark:text-[#25E2CC]'
+                ? 'border-[#0284c7]/40 bg-[#0284c7]/10 text-[#034e7b] dark:border-[#25E2CC]/60 dark:bg-[#25E2CC]/15 dark:text-[#25E2CC]'
                 : 'border-slate-300 dark:border-slate-700/50 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-full bg-[#0D9488] dark:bg-[#25E2CC] animate-ping inline-block" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#0284c7] dark:bg-[#25E2CC] animate-ping inline-block" />
             Future Forecast
           </button>
         </div>
@@ -287,7 +287,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
             }}
             className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer ${
               zoomFuture
-                ? 'border-[#0D9488] bg-[#0D9488]/15 text-[#0F766E] dark:border-[#25E2CC] dark:bg-[#25E2CC]/20 dark:text-[#25E2CC]'
+                ? 'border-[#0284c7] bg-[#0284c7]/15 text-[#034e7b] dark:border-[#25E2CC] dark:bg-[#25E2CC]/20 dark:text-[#25E2CC]'
                 : 'border-slate-300 bg-white text-slate-700 hover:border-[#0073A8] dark:border-[#00A3E0]/30 dark:bg-[#001421] dark:text-slate-300 dark:hover:border-[#00A3E0]'
             }`}
           >
@@ -584,7 +584,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
         >
           <div className="font-mono font-bold text-[#0B2234] dark:text-white mb-1 flex items-center justify-between gap-4">
             <span>{hovered.label}</span>
-            <span className="px-1.5 py-0.5 rounded bg-[#0073A8]/15 text-[#0F766E] dark:bg-[#00A3E0]/25 dark:text-[#25E2CC] text-[10px] font-semibold">
+            <span className="px-1.5 py-0.5 rounded bg-[#0073A8]/15 text-[#034e7b] dark:bg-[#00A3E0]/25 dark:text-[#25E2CC] text-[10px] font-semibold">
               {hovered.futurePred !== undefined
                 ? 'Future Forecast'
                 : hovered.holdoutPred !== undefined
@@ -594,7 +594,7 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
           </div>
           <div className="space-y-0.5 font-mono text-[11px]">
             {hovered.actual !== undefined && (
-              <div className="flex justify-between gap-4 text-[#0073A8] dark:text-[#00A3E0]">
+              <div className="flex justify-between gap-4 text-[#005f99] dark:text-[#00A3E0]">
                 <span>Actual Volume:</span>
                 <span className="font-bold">{hovered.actual.toLocaleString()}</span>
               </div>
@@ -606,13 +606,13 @@ export const InteractiveForecastChart: React.FC<{ data: TrajectoryPoint[] }> = (
               </div>
             )}
             {hovered.holdoutPred !== undefined && (
-              <div className="flex justify-between gap-4 text-[#0D826E] dark:text-[#00C389]">
+              <div className="flex justify-between gap-4 text-[#1d4ed8] dark:text-[#00C389]">
                 <span>Holdout Forecast:</span>
                 <span className="font-bold">{hovered.holdoutPred.toLocaleString()}</span>
               </div>
             )}
             {hovered.futurePred !== undefined && (
-              <div className="flex justify-between gap-4 text-[#0F766E] dark:text-[#25E2CC]">
+              <div className="flex justify-between gap-4 text-[#034e7b] dark:text-[#25E2CC]">
                 <span>Projected Volume:</span>
                 <span className="font-bold">{hovered.futurePred.toLocaleString()}</span>
               </div>
@@ -679,7 +679,7 @@ export const InteractiveArrivalBarChart: React.FC<{
             </button>
           </div>
         </div>
-        <span className="px-3 py-1 rounded-lg bg-[#0D9488]/10 border border-[#0D9488]/35 font-mono font-bold text-[#0F766E] dark:bg-[#00A3E0]/15 dark:border-[#25E2CC]/40 dark:text-[#25E2CC]">
+        <span className="px-3 py-1 rounded-lg bg-[#0073A8]/10 border border-[#0073A8]/35 font-mono font-bold text-[#034e7b] dark:bg-[#00A3E0]/15 dark:border-[#25E2CC]/40 dark:text-[#25E2CC]">
           {hoverIdx !== null ? `Slot ${activeSlot.time}` : `Peak @ ${peakSlot.time}`} —{' '}
           {activeSlot.arrivalPct}% · {activeSlot.calls.toLocaleString()} calls
         </span>
@@ -848,11 +848,11 @@ export const InteractiveStaffingChart: React.FC<{
             onClick={() => setLayers((l) => ({ ...l, traffic: !l.traffic }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               layers.traffic
-                ? 'border-[#0D826E]/35 bg-[#0D826E]/10 text-[#0D826E] dark:border-[#00C389]/50 dark:bg-[#00C389]/15 dark:text-[#00C389]'
+                ? 'border-[#1d4ed8]/35 bg-[#1d4ed8]/10 text-[#1d4ed8] dark:border-[#00C389]/50 dark:bg-[#00C389]/15 dark:text-[#00C389]'
                 : 'border-slate-300 dark:border-slate-700 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-2.5 h-2.5 rounded-xs bg-[#0D826E] dark:bg-[#00C389] inline-block" />
+            <span className="w-2.5 h-2.5 rounded-xs bg-[#1d4ed8] dark:bg-[#00C389] inline-block" />
             Offered Traffic (Erlangs A)
           </button>
 
@@ -861,11 +861,11 @@ export const InteractiveStaffingChart: React.FC<{
             onClick={() => setLayers((l) => ({ ...l, sla: !l.sla }))}
             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold border transition cursor-pointer ${
               layers.sla
-                ? 'border-[#0D9488]/40 bg-[#0D9488]/10 text-[#0F766E] dark:border-[#25E2CC]/50 dark:bg-[#25E2CC]/15 dark:text-[#25E2CC]'
+                ? 'border-[#0284c7]/40 bg-[#0284c7]/10 text-[#034e7b] dark:border-[#25E2CC]/50 dark:bg-[#25E2CC]/15 dark:text-[#25E2CC]'
                 : 'border-slate-300 dark:border-slate-700 opacity-50 text-slate-500 dark:text-slate-400'
             }`}
           >
-            <span className="w-3 h-0.5 border-t-2 border-dashed border-[#0D9488] dark:border-[#25E2CC] inline-block" />
+            <span className="w-3 h-0.5 border-t-2 border-dashed border-[#0284c7] dark:border-[#25E2CC] inline-block" />
             Expected SLA %
           </button>
 
@@ -1026,7 +1026,7 @@ export const InteractiveStaffingChart: React.FC<{
             left: `${Math.min(74, Math.max(5, (hoverIdx / Math.max(1, rows.length - 1)) * 100))}%`,
           }}
         >
-          <div className="font-mono font-bold text-[#0F766E] dark:text-[#25E2CC] mb-1">
+          <div className="font-mono font-bold text-[#034e7b] dark:text-[#25E2CC] mb-1">
             Interval {hovered.timeLabel}
           </div>
           <div className="space-y-0.5 font-mono text-[11px]">
@@ -1034,17 +1034,17 @@ export const InteractiveStaffingChart: React.FC<{
               <span>Calls Offered:</span>
               <span className="font-bold">{hovered.volume.toLocaleString()}</span>
             </div>
-            <div className="flex justify-between gap-4 text-[#0D826E] dark:text-[#00C389]">
+            <div className="flex justify-between gap-4 text-[#1d4ed8] dark:text-[#00C389]">
               <span>Traffic (Erlangs A):</span>
               <span className="font-bold">{hovered.erlangs.toFixed(2)} E</span>
             </div>
-            <div className="flex justify-between gap-4 text-[#0073A8] dark:text-[#00A3E0]">
+            <div className="flex justify-between gap-4 text-[#005f99] dark:text-[#00A3E0]">
               <span>Integer / Fractional:</span>
               <span className="font-bold">
                 {hovered.integerSeats} / {hovered.fractionalSeats.toFixed(2)}
               </span>
             </div>
-            <div className="flex justify-between gap-4 text-[#0F766E] dark:text-[#25E2CC]">
+            <div className="flex justify-between gap-4 text-[#034e7b] dark:text-[#25E2CC]">
               <span>Expected SLA / ASA:</span>
               <span className="font-bold">
                 {hovered.slPct.toFixed(1)}% ({hovered.asaSec.toFixed(1)}s)
@@ -1301,7 +1301,7 @@ export const InteractiveRosterCoverageChart: React.FC<{
             left: `${Math.min(72, Math.max(4, (hoverIdx / Math.max(1, items.length - 1)) * 100))}%`,
           }}
         >
-          <div className="font-mono font-bold text-[#0F766E] dark:text-[#25E2CC] mb-1">
+          <div className="font-mono font-bold text-[#034e7b] dark:text-[#25E2CC] mb-1">
             {viewMode === 'intraday' ? `${selectedDay} · ${hovered.label}` : hovered.label}
           </div>
           <div className="space-y-0.5 font-mono text-[11px]">
@@ -1313,7 +1313,7 @@ export const InteractiveRosterCoverageChart: React.FC<{
               <span>{viewMode === 'intraday' ? 'Required Seats:' : 'Req Prod Hrs:'}</span>
               <span className="font-bold">{hovered.req.toFixed(1)}</span>
             </div>
-            <div className="flex justify-between gap-4 text-[#0073A8] dark:text-[#00A3E0]">
+            <div className="flex justify-between gap-4 text-[#005f99] dark:text-[#00A3E0]">
               <span>{viewMode === 'intraday' ? 'Gross Clock-In:' : 'Gross Hrs:'}</span>
               <span className="font-bold">{hovered.gross.toFixed(1)}</span>
             </div>
@@ -1321,7 +1321,7 @@ export const InteractiveRosterCoverageChart: React.FC<{
               <span>{viewMode === 'intraday' ? 'On Break (-FTE):' : 'Break Deduction:'}</span>
               <span className="font-bold">-{hovered.brk.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between gap-4 text-[#0D826E] dark:text-[#00C389]">
+            <div className="flex justify-between gap-4 text-[#1d4ed8] dark:text-[#00C389]">
               <span>{viewMode === 'intraday' ? 'Net Productive:' : 'Net Paid Hrs:'}</span>
               <span className="font-bold">{hovered.net.toFixed(2)}</span>
             </div>

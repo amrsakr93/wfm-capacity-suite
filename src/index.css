@@ -49,26 +49,26 @@ html.light {
   --cnx-chart-border: #d5e2ee;
   --cnx-chart-grid: rgba(11, 34, 52, 0.1);
   --cnx-chart-axis: #475569;
-  --cnx-chart-actual: #0073a8;
+  --cnx-chart-actual: #005f99;
   --cnx-chart-train: #64748b;
-  --cnx-chart-holdout: #0d826e;
-  --cnx-chart-future: #0d9488;
-  --cnx-chart-future-text: #0f766e;
-  --cnx-chart-occ: #005a8d;
+  --cnx-chart-holdout: #1d4ed8;
+  --cnx-chart-future: #0284c7;
+  --cnx-chart-future-text: #034e7b;
+  --cnx-chart-occ: #004a7c;
   --cnx-chart-node-stroke: #ffffff;
-  --cnx-chart-horizon-bg: rgba(13, 148, 136, 0.08);
-  --cnx-chart-horizon-badge: #e6f6f4;
-  --cnx-bar-norm-top: #0088c2;
-  --cnx-bar-norm-bot: #004f77;
-  --cnx-bar-peak-top: #14b8a6;
-  --cnx-bar-peak-bot: #0073a8;
-  --cnx-bar-hover-top: #0d9488;
-  --cnx-bar-hover-bot: #0f766e;
-  --cnx-seat-top: #0088c2;
-  --cnx-seat-bot: #005a8d;
-  --cnx-erlang-top: #0d9488;
-  --cnx-erlang-bot: #0b4f4a;
-  --cnx-bar-glow: rgba(13, 148, 136, 0.34);
+  --cnx-chart-horizon-bg: rgba(0, 115, 168, 0.08);
+  --cnx-chart-horizon-badge: #e6f2fa;
+  --cnx-bar-norm-top: #0077b6;
+  --cnx-bar-norm-bot: #003d5b;
+  --cnx-bar-peak-top: #0284c7;
+  --cnx-bar-peak-bot: #004f77;
+  --cnx-bar-hover-top: #0369a1;
+  --cnx-bar-hover-bot: #003d5b;
+  --cnx-seat-top: #0077b6;
+  --cnx-seat-bot: #004a7c;
+  --cnx-erlang-top: #1d4ed8;
+  --cnx-erlang-bot: #1e3a8a;
+  --cnx-bar-glow: rgba(0, 115, 168, 0.28);
 }
 
 .cnx-chart-surface {
@@ -330,16 +330,61 @@ html.light .text-sky-300,
 html.light .text-indigo-600,
 html.light .text-indigo-400,
 html.light .text-indigo-300 {
-  color: #0073a8 !important;
+  color: #005f99 !important;
 }
 
+/* Eye-comfort Day Mode typography: replace glaring/washed-out green & teal numbers/text with crisp Concentrix Royal Cobalt */
+html.light .text-emerald-700,
 html.light .text-emerald-600,
+html.light .text-emerald-500,
 html.light .text-emerald-400,
 html.light .text-emerald-300,
+html.light .text-teal-700,
+html.light .text-teal-600,
+html.light .text-teal-500,
+html.light .text-teal-400,
+html.light .text-teal-300,
+html.light .text-green-700,
+html.light .text-green-600,
+html.light .text-green-500,
+html.light .text-green-400 {
+  color: #0e4f8a !important;
+}
+
+html.light .text-amber-700,
 html.light .text-amber-600,
+html.light .text-amber-500,
 html.light .text-amber-400,
 html.light .text-amber-300 {
-  color: #0d826e !important;
+  color: #b45309 !important;
+}
+
+html.light .bg-emerald-500\/15,
+html.light .bg-emerald-500\/10,
+html.light .bg-teal-500\/15,
+html.light .bg-teal-500\/10 {
+  background-color: rgba(0, 95, 153, 0.09) !important;
+}
+
+html.light .bg-amber-500\/15,
+html.light .bg-amber-500\/12,
+html.light .bg-amber-500\/10,
+html.light .bg-amber-500\/5 {
+  background-color: rgba(180, 83, 9, 0.09) !important;
+}
+
+html.light .border-emerald-500\/35,
+html.light .border-emerald-500\/40,
+html.light .border-emerald-500\/45,
+html.light .border-teal-500\/35,
+html.light .border-teal-500\/40 {
+  border-color: rgba(14, 79, 138, 0.28) !important;
+}
+
+html.light .border-amber-500\/35,
+html.light .border-amber-500\/40,
+html.light .border-amber-500\/50 {
+  border-color: rgba(180, 83, 9, 0.34) !important;
 }
 
 html.light .bg-sky-600,
@@ -406,7 +451,7 @@ html.light .cnx-chart-tooltip {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -838,21 +883,21 @@ html.light .cnx-chart-tooltip {
     --cnx-chart-axis: #475569 !important;
     --cnx-chart-actual: #0073a8 !important;
     --cnx-chart-train: #64748b !important;
-    --cnx-chart-holdout: #0d826e !important;
-    --cnx-chart-future: #0d9488 !important;
-    --cnx-chart-future-text: #0f766e !important;
-    --cnx-chart-occ: #005a8d !important;
+    --cnx-chart-holdout: #1d4ed8 !important;
+    --cnx-chart-future: #0284c7 !important;
+    --cnx-chart-future-text: #034e7b !important;
+    --cnx-chart-occ: #004a7c !important;
     --cnx-chart-node-stroke: #ffffff !important;
-    --cnx-chart-horizon-bg: rgba(13, 148, 136, 0.08) !important;
-    --cnx-chart-horizon-badge: #e6f6f4 !important;
-    --cnx-bar-norm-top: #0088c2 !important;
-    --cnx-bar-norm-bot: #004f77 !important;
-    --cnx-bar-peak-top: #14b8a6 !important;
-    --cnx-bar-peak-bot: #0073a8 !important;
-    --cnx-seat-top: #0088c2 !important;
-    --cnx-seat-bot: #005a8d !important;
-    --cnx-erlang-top: #0d9488 !important;
-    --cnx-erlang-bot: #0b4f4a !important;
+    --cnx-chart-horizon-bg: rgba(0, 115, 168, 0.08) !important;
+    --cnx-chart-horizon-badge: #e6f2fa !important;
+    --cnx-bar-norm-top: #0077b6 !important;
+    --cnx-bar-norm-bot: #003d5b !important;
+    --cnx-bar-peak-top: #0284c7 !important;
+    --cnx-bar-peak-bot: #004f77 !important;
+    --cnx-seat-top: #0077b6 !important;
+    --cnx-seat-bot: #004a7c !important;
+    --cnx-erlang-top: #1d4ed8 !important;
+    --cnx-erlang-bot: #1e3a8a !important;
   }
 
   /* With @custom-variant dark scoped to @media screen, only paper/accent tweaks remain */
@@ -869,16 +914,23 @@ html.light .cnx-chart-tooltip {
   .text-indigo-600,
   .text-indigo-400,
   .text-indigo-300 {
-    color: #0073a8 !important;
+    color: #005f99 !important;
   }
 
+  .text-emerald-700,
   .text-emerald-600,
   .text-emerald-400,
   .text-emerald-300,
+  .text-teal-700,
+  .text-teal-600 {
+    color: #0e4f8a !important;
+  }
+
+  .text-amber-700,
   .text-amber-600,
   .text-amber-400,
   .text-amber-300 {
-    color: #0d826e !important;
+    color: #b45309 !important;
   }
 
   .cnx-btn-active {

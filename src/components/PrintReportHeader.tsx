@@ -120,16 +120,16 @@ export const PrintReportHeader: React.FC<PrintReportHeaderProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg bg-[#E6F7F5] border border-[#0D9488]/50 overflow-hidden">
-            <div className="h-1 bg-[#0D9488]" />
+          <div className="rounded-lg bg-[#EFF6FF] border border-[#1d4ed8]/40 overflow-hidden">
+            <div className="h-1 bg-[#1d4ed8]" />
             <div className="p-2.5">
-              <div className="text-[9px] font-bold uppercase tracking-wider text-[#0F766E]">
+              <div className="text-[9px] font-bold uppercase tracking-wider text-[#0e4f8a]">
                 Final Gross FTE
               </div>
-              <div className="text-base font-extrabold tabular-nums text-[#0F766E] mt-0.5">
+              <div className="text-base font-extrabold tabular-nums text-[#0e4f8a] mt-0.5">
                 {Math.round(finalGrossFte)} Agents
               </div>
-              <div className="text-[9.5px] text-[#0F766E]">
+              <div className="text-[9.5px] text-[#0e4f8a]">
                 Exact FTE: {finalGrossFte.toFixed(2)}
               </div>
             </div>

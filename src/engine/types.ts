@@ -321,6 +321,7 @@ export interface SchedulingRules {
   minInterShiftRestHours: number; // default 12h (blocks clopening)
   annualVisibilityInOutput: 'exclude' | 'show_muted'; // default 'show_muted' -> AL shown full-week like other leaves
   shiftHeadcountOverrides?: Record<string, number | null>; // optional manual agent pool per shift ID
+  shiftDayHeadcountOverrides?: Record<string, Partial<Record<DayKey, number | null>>>; // optional manual daily working count per shift × weekday
   breakRules: BreakPlacementRules;
 }
 
@@ -330,6 +331,7 @@ export interface ShiftDailyMixRow {
   wrapsMidnight: boolean;
   durationHours: number;
   targetOverride: number | null;
+  dayOverrides?: Partial<Record<DayKey, number | null>>;
   assignedPoolCount: number;
   avgPerDay: number;
   byDay: Record<DayKey, number>;

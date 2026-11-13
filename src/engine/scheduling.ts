@@ -53,6 +53,7 @@ export const DEFAULT_SCHEDULING_RULES: SchedulingRules = {
   minInterShiftRestHours: 12, // Enforces >= 12h sleep/rest between shifts
   annualVisibilityInOutput: 'show_muted', // AL shown full-week inside roster table like other leaves (0% cov)
   shiftHeadcountOverrides: {},
+  shiftDayHeadcountOverrides: {},
   breakRules: { ...DEFAULT_BREAK_RULES },
 };
 
@@ -61,6 +62,14 @@ export const DEFAULT_SCHEDULING_RULES: SchedulingRules = {
  */
 export function sortShiftCatalogChronologically(shifts: ShiftTemplate[]): ShiftTemplate[] {
   return [...shifts].sort((a, b) => a.startMin - b.startMin || a.durationMin - b.durationMin);
+}
+
+/**
+ * Identifies overnight / graveyard shift windows (wrapping past midnight or starting between 22:00 and 05:59).
+ * Used to keep unpinned surplus heads out of overnight shifts when daytime shifts exist.
+ */
+export function isOvernightShiftWindow(shift: ShiftTemplate): boolean {
+  return shift.wrapsMidnight || shift.startMin < 360 || shift.startMin >= 1320;
 }
 
 export function formatMinutesHHMM(totalMin: number): string {
@@ -867,12 +876,17 @@ export function recalculateScheduleCoverage(params: {
     totalReqProdHours > 0 ? Number(((totalSchedNetHours / totalReqProdHours) * 100).toFixed(1)) : 100;
 
   const overrides = rules.shiftHeadcountOverrides ?? {};
+  const dayOverridesAll = rules.shiftDayHeadcountOverrides ?? {};
   const shiftDailyMix: ShiftDailyMixRow[] = sortedCatalog
     .filter((sh) => {
       const counts = shiftDayCounts.get(sh.id);
       const totalForSh = counts ? WEEK_DAYS.reduce((s, dk) => s + counts[dk], 0) : 0;
       const hasOv = overrides[sh.id] !== undefined && overrides[sh.id] !== null;
-      return sh.enabled || totalForSh > 0 || hasOv;
+      const shDayOv = dayOverridesAll[sh.id];
+      const hasDayOv =
+        !!shDayOv &&
+        WEEK_DAYS.some((dk) => shDayOv[dk] !== undefined && shDayOv[dk] !== null && Number.isFinite(shDayOv[dk]!));
+      return sh.enabled || totalForSh > 0 || hasOv || hasDayOv;
     })
     .map((sh) => {
       const byDay = shiftDayCounts.get(sh.id) ?? {
@@ -886,6 +900,18 @@ export function recalculateScheduleCoverage(params: {
       };
       const totalWeeklyShifts = WEEK_DAYS.reduce((s, dk) => s + byDay[dk], 0);
       const ovVal = overrides[sh.id];
+      const shDayOv = dayOverridesAll[sh.id];
+      const cleanDayOv: Partial<Record<DayKey, number | null>> = {};
+      let hasAnyDayOv = false;
+      if (shDayOv) {
+        for (const dk of WEEK_DAYS) {
+          const val = shDayOv[dk];
+          if (val !== undefined && val !== null && Number.isFinite(val)) {
+            cleanDayOv[dk] = Math.max(0, Math.round(val));
+            hasAnyDayOv = true;
+          }
+        }
+      }
       return {
         shiftId: sh.id,
         shiftLabel: sh.label,
@@ -895,6 +921,7 @@ export function recalculateScheduleCoverage(params: {
           ovVal !== undefined && ovVal !== null && Number.isFinite(ovVal)
             ? Math.max(0, Math.round(ovVal))
             : null,
+        dayOverrides: hasAnyDayOv ? cleanDayOv : undefined,
         assignedPoolCount: primaryPoolCountByShift.get(sh.id) ?? 0,
         avgPerDay: Number((totalWeeklyShifts / 7).toFixed(1)),
         byDay,
@@ -967,6 +994,20 @@ export function generateWeeklySchedule(params: {
   );
   const shiftMap = new Map(catalogToUse.map((s) => [s.id, s]));
   const overrides = rules.shiftHeadcountOverrides ?? {};
+  const dayOverridesRaw = rules.shiftDayHeadcountOverrides ?? {};
+  const dayOverridesMap = new Map<string, Map<number, number>>();
+  for (const sh of catalogToUse) {
+    const shOv = dayOverridesRaw[sh.id];
+    if (!shOv) continue;
+    const m = new Map<number, number>();
+    for (let dIdx = 0; dIdx < 7; dIdx++) {
+      const val = shOv[WEEK_DAYS[dIdx]];
+      if (val !== undefined && val !== null && Number.isFinite(val)) {
+        m.set(dIdx, Math.max(0, Math.round(val)));
+      }
+    }
+    if (m.size > 0) dayOverridesMap.set(sh.id, m);
+  }
 
   // 1. Build base agent list from mode
   const rawRoster: { id: string; name: string; source: 'manual_count' | 'uploaded_name'; lockedException: ExceptionCode | null }[] = [];
@@ -1028,54 +1069,202 @@ export function generateWeeklySchedule(params: {
     }
   }
 
-  // Build initial rows & compute demand profiles
+  // Build initial demand profiles
   const profiles = buildWeeklyDemandProfiles({ nextWeekDays, dayCurves, erlangConfig });
   const req15 = WEEK_DAYS.map((dk) => [...profiles[dk].required15]);
   const gross15: number[][] = Array.from({ length: 7 }, () => new Array(96).fill(0));
+  const shiftDayCounts = new Map<string, number[]>();
+  for (const sh of catalogToUse) shiftDayCounts.set(sh.id, new Array<number>(7).fill(0));
 
   const avgNetShiftHrs =
     catalogToUse.reduce((s, sh) => s + Math.max(1, (sh.durationMin - 60) / 60), 0) /
     catalogToUse.length;
 
-  // 3. Distribute active schedulable agents across OFF pairs matching daily demand shape
+  // 3. Partition Active Pool vs Explicit Per-Shift Manual Pool Overrides
   const offPatterns = getValidOffPairSet(rules.allowSunMonSplitOff);
   const activeIndices = rawRoster
     .map((r, idx) => (r.lockedException ? -1 : idx))
     .filter((idx) => idx >= 0);
 
-  const dayWorkCount = new Array<number>(7).fill(0);
+  const pinnedPoolShiftByRosterIdx = new Map<number, ShiftTemplate>();
+  let pinCursor = 0;
+  const pinnedGroups: { shift: ShiftTemplate; rosterIndices: number[] }[] = [];
+
+  for (const sh of catalogToUse) {
+    const rawOv = overrides[sh.id];
+    if (rawOv === undefined || rawOv === null || !Number.isFinite(rawOv)) continue;
+    const pinTarget = Math.max(0, Math.round(rawOv));
+    const groupIndices: number[] = [];
+    while (groupIndices.length < pinTarget && pinCursor < activeIndices.length) {
+      const rosterIdx = activeIndices[pinCursor++];
+      pinnedPoolShiftByRosterIdx.set(rosterIdx, sh);
+      groupIndices.push(rosterIdx);
+    }
+    if (groupIndices.length > 0) pinnedGroups.push({ shift: sh, rosterIndices: groupIndices });
+  }
+
+  const autoActiveIndices = activeIndices.filter((rIdx) => !pinnedPoolShiftByRosterIdx.has(rIdx));
+
+  // Strict Overflow Rule:
+  // A) If ANY shift is left on Auto, keep pinned shifts isolated & send remaining agents strictly to Auto shifts.
+  // B) If ALL non-zero shifts are pinned below active pool, spread overflow strictly across non-overnight shifts first.
+  const autoAllowedShifts = catalogToUse.filter((sh) => {
+    const ov = overrides[sh.id];
+    return ov === undefined || ov === null;
+  });
+  const nonZeroCatalog = catalogToUse.filter((sh) => overrides[sh.id] !== 0);
+  const nonZeroDaytime = nonZeroCatalog.filter((sh) => !isOvernightShiftWindow(sh));
+  const daytimeFallback = catalogToUse.filter((sh) => !isOvernightShiftWindow(sh));
+
+  const primaryAutoPool =
+    autoAllowedShifts.length > 0
+      ? autoAllowedShifts
+      : nonZeroDaytime.length > 0
+        ? nonZeroDaytime
+        : nonZeroCatalog.length > 0
+          ? nonZeroCatalog
+          : daytimeFallback.length > 0
+            ? daytimeFallback
+            : catalogToUse;
+
+  // Compute interval objective helpers
+  const targetGrossForReq = (req: number) => (req <= 2 ? req : req / 0.889);
+  const intervalCost = (req: number, gross: number): number => {
+    const tgt = targetGrossForReq(req);
+    if (gross < tgt) {
+      const diff = tgt - gross;
+      return diff * diff * 5.5 + diff * 3.0;
+    }
+    const ex = gross - tgt;
+    return req <= 2
+      ? ex * (5.8 + 4.5 / Math.max(0.8, req)) + ex * ex * 3.8
+      : ex * (1.1 + 1.8 / Math.max(1.0, req)) + ex * ex * 0.22;
+  };
+  const dayOverrideCost = (shiftId: string, dIdx: number, count: number): number => {
+    const tgt = dayOverridesMap.get(shiftId)?.get(dIdx);
+    if (tgt === undefined) return 0;
+    const diff = Math.abs(count - tgt);
+    return diff * 450 + diff * diff * 180;
+  };
+
+  // 4A. Stratified OFF-Pattern Assignment for Each Pinned Shift Group
+  // Prevents all weekend OFFs clustering onto one shift (e.g., 4 agents getting [4,4,4,4,4,0,0])
   const offPairByRosterIdx = new Map<number, [number, number]>();
+  const globalPinnedWorkByDay = new Array<number>(7).fill(0);
 
-  // Assign OFF patterns iteratively to reduce the largest remaining daily hour deficit
-  for (let step = 0; step < activeIndices.length; step++) {
-    const rosterIdx = activeIndices[step];
-    let bestPair = offPatterns[0];
-    let bestPatternScore = -Infinity;
-
-    for (const pair of offPatterns) {
-      let gainScore = 0;
-      for (let d = 0; d < 7; d++) {
-        if (d === pair[0] || d === pair[1]) continue;
-        const reqH = profiles[WEEK_DAYS[d]].requiredProdHours;
-        const coveredH = dayWorkCount[d] * avgNetShiftHrs;
-        const deficit = reqH - coveredH;
-        // Strongly reward covering under-covered days, with gentle floor so light days aren't starved
-        gainScore += deficit > 0 ? deficit * 2.5 : deficit * 0.25;
-        if (dayWorkCount[d] === 0 && reqH > 0) gainScore += 100;
-      }
-      if (gainScore > bestPatternScore) {
-        bestPatternScore = gainScore;
-        bestPair = pair;
+  for (const group of pinnedGroups) {
+    const { shift: sh, rosterIndices } = group;
+    const P = rosterIndices.length;
+    const shDayOv = dayOverridesMap.get(sh.id);
+    const shDayNeed = WEEK_DAYS.map((_, d) =>
+      getShiftSlotsForDay(sh, d).reduce((s, pos) => s + req15[pos.dayIdx][pos.qIdx], 0)
+    );
+    const maxNeed = Math.max(1, ...shDayNeed);
+    // Desired daily working headcount across 5*P total shift-days
+    const desire = new Array<number>(7).fill(0);
+    let fixedSum = 0;
+    const unpinnedDays: number[] = [];
+    for (let d = 0; d < 7; d++) {
+      const ov = shDayOv?.get(d);
+      if (ov !== undefined) {
+        const clamped = Math.min(P, ov);
+        desire[d] = clamped;
+        fixedSum += clamped;
+      } else {
+        unpinnedDays.push(d);
       }
     }
+    const remainingShifts = Math.max(0, 5 * P - fixedSum);
+    const weightSum = unpinnedDays.reduce((s, d) => s + (shDayNeed[d] + 0.2 * maxNeed), 0) || 1;
+    for (const d of unpinnedDays) {
+      desire[d] = Math.min(
+        P,
+        (remainingShifts * (shDayNeed[d] + 0.2 * maxNeed)) / weightSum
+      );
+    }
 
-    offPairByRosterIdx.set(rosterIdx, bestPair);
-    for (let d = 0; d < 7; d++) {
-      if (d !== bestPair[0] && d !== bestPair[1]) dayWorkCount[d]++;
+    const groupWorkByDay = new Array<number>(7).fill(0);
+    const pairUsage = new Map<string, number>();
+    for (const rosterIdx of rosterIndices) {
+      let bestPair = offPatterns[0];
+      let bestScore = -Infinity;
+      for (const pair of offPatterns) {
+        const pKey = `${pair[0]}-${pair[1]}`;
+        let sc = 0;
+        for (let d = 0; d < 7; d++) {
+          if (d === pair[0] || d === pair[1]) {
+            // Penalize removing from explicitly over-target days less than empty days
+            const surplusIfRemoved = groupWorkByDay[d] - desire[d];
+            if (surplusIfRemoved < -0.5) sc -= 2;
+            continue;
+          }
+          const gap = desire[d] - groupWorkByDay[d];
+          sc += gap > 0 ? gap * 3.0 + 1.0 : gap * 0.4;
+          if (groupWorkByDay[d] === 0 && desire[d] > 0.2) sc += 12;
+        }
+        // Anti-collapse diversity bias inside small pinned groups
+        const usedTimes = pairUsage.get(pKey) ?? 0;
+        sc -= usedTimes * (P <= 8 ? 3.5 : 0.8);
+        if (sc > bestScore) {
+          bestScore = sc;
+          bestPair = pair;
+        }
+      }
+      offPairByRosterIdx.set(rosterIdx, bestPair);
+      const pKey = `${bestPair[0]}-${bestPair[1]}`;
+      pairUsage.set(pKey, (pairUsage.get(pKey) ?? 0) + 1);
+      for (let d = 0; d < 7; d++) {
+        if (d !== bestPair[0] && d !== bestPair[1]) {
+          groupWorkByDay[d]++;
+          globalPinnedWorkByDay[d]++;
+        }
+      }
     }
   }
 
-  // Construct scaffolded rows (non-workdays already locked)
+  // 4B. Stratified OFF-Pattern Assignment for Auto Pool Agents Matching Remaining Demand + Explicit Auto Day Overrides
+  const autoDayWorkCount = new Array<number>(7).fill(0);
+  const autoExplicitNeedByDay = WEEK_DAYS.map((_, d) => {
+    let extra = 0;
+    for (const sh of primaryAutoPool) {
+      const ov = dayOverridesMap.get(sh.id)?.get(d);
+      if (ov !== undefined) extra += ov;
+    }
+    return extra;
+  });
+  const autoPairUsage = new Map<string, number>();
+
+  for (const rosterIdx of autoActiveIndices) {
+    let bestPair = offPatterns[0];
+    let bestScore = -Infinity;
+    for (const pair of offPatterns) {
+      const pKey = `${pair[0]}-${pair[1]}`;
+      let sc = 0;
+      for (let d = 0; d < 7; d++) {
+        if (d === pair[0] || d === pair[1]) continue;
+        const reqH = profiles[WEEK_DAYS[d]].requiredProdHours;
+        const totalWorkD = globalPinnedWorkByDay[d] + autoDayWorkCount[d];
+        const deficit = reqH - totalWorkD * avgNetShiftHrs;
+        sc += deficit > 0 ? deficit * 2.6 : deficit * 0.25;
+        if (autoDayWorkCount[d] < autoExplicitNeedByDay[d]) sc += 30;
+        if (totalWorkD === 0 && reqH > 0) sc += 100;
+      }
+      // Encourage smooth variety across OFF patterns when scores tie
+      sc -= (autoPairUsage.get(pKey) ?? 0) * 0.35;
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestPair = pair;
+      }
+    }
+    offPairByRosterIdx.set(rosterIdx, bestPair);
+    const pKey = `${bestPair[0]}-${bestPair[1]}`;
+    autoPairUsage.set(pKey, (autoPairUsage.get(pKey) ?? 0) + 1);
+    for (let d = 0; d < 7; d++) {
+      if (d !== bestPair[0] && d !== bestPair[1]) autoDayWorkCount[d]++;
+    }
+  }
+
+  // Construct scaffolded rows & seed all Weekly-Pinned agents directly into gross15 + shiftDayCounts
   const draftRows: ScheduledAgentRow[] = rawRoster.map((r, idx) => {
     const assignments = {} as Record<DayKey, AgentDayAssignment>;
     if (r.lockedException) {
@@ -1098,15 +1287,24 @@ export function generateWeeklySchedule(params: {
     }
 
     const pair = offPairByRosterIdx.get(idx) ?? [5, 6];
+    const pinnedSh = pinnedPoolShiftByRosterIdx.get(idx) ?? null;
     for (let d = 0; d < 7; d++) {
       const dk = WEEK_DAYS[d];
       const isOff = d === pair[0] || d === pair[1];
-      assignments[dk] = {
-        dayKey: dk,
-        status: isOff ? 'OFF' : 'WORK',
-        shiftId: null,
-        breaks: null,
-      };
+      if (!isOff && pinnedSh) {
+        assignments[dk] = { dayKey: dk, status: 'WORK', shiftId: pinnedSh.id, breaks: null };
+        shiftDayCounts.get(pinnedSh.id)![d] += 1;
+        for (const pos of getShiftSlotsForDay(pinnedSh, d)) {
+          gross15[pos.dayIdx][pos.qIdx] += 1;
+        }
+      } else {
+        assignments[dk] = {
+          dayKey: dk,
+          status: isOff ? 'OFF' : 'WORK',
+          shiftId: null,
+          breaks: null,
+        };
+      }
     }
     return {
       agentId: r.id,
@@ -1127,12 +1325,14 @@ export function generateWeeklySchedule(params: {
   const isCandidateShiftFeasible = (
     row: ScheduledAgentRow,
     dayIdx: number,
-    candidate: ShiftTemplate
+    candidate: ShiftTemplate,
+    overrideAssignments?: Record<DayKey, AgentDayAssignment>
   ): boolean => {
+    const baseAssign = overrideAssignments ?? row.assignments;
     const starts: number[] = [candidate.startMin];
     for (let d = 0; d < 7; d++) {
       if (d === dayIdx) continue;
-      const a = row.assignments[WEEK_DAYS[d]];
+      const a = baseAssign[WEEK_DAYS[d]];
       if (a.status === 'WORK' && a.shiftId) {
         const s = shiftMap.get(a.shiftId);
         if (s) starts.push(s.startMin);
@@ -1142,10 +1342,14 @@ export function generateWeeklySchedule(params: {
       return false;
     }
 
-    // Temporarily evaluate rest check around adjacent work days (including Sun->Mon wrap)
     const testAssignments = {
-      ...row.assignments,
-      [WEEK_DAYS[dayIdx]]: { dayKey: WEEK_DAYS[dayIdx], status: 'WORK' as LeaveAllocationCode, shiftId: candidate.id, breaks: null },
+      ...baseAssign,
+      [WEEK_DAYS[dayIdx]]: {
+        dayKey: WEEK_DAYS[dayIdx],
+        status: 'WORK' as LeaveAllocationCode,
+        shiftId: candidate.id,
+        breaks: null,
+      },
     };
     const minRest = getMinimumWeeklyRestHours(testAssignments, shiftMap);
     if (minRest !== null && minRest < rules.minInterShiftRestHours - 1e-6) {
@@ -1154,15 +1358,19 @@ export function generateWeeklySchedule(params: {
     return true;
   };
 
-  // Marginal WFM Shift Scoring: rewards unfilled Erlang demand & heavily penalizes quiet/overnight idle excess
-  const scoreShiftDelta = (candidate: ShiftTemplate, dayIdx: number): number => {
+  // Marginal WFM Shift Scoring: rewards unfilled Erlang demand & explicit daily pins, penalizes quiet/overnight waste
+  const scoreShiftDeltaWithDayOv = (
+    candidate: ShiftTemplate,
+    dayIdx: number,
+    grossMat: number[][],
+    shCounts: Map<string, number[]>
+  ): number => {
     const slots = getShiftSlotsForDay(candidate, dayIdx);
     const netWeight = Math.max(0.75, (candidate.durationMin - 60) / candidate.durationMin);
     let score = 0;
     for (const pos of slots) {
       const req = req15[pos.dayIdx][pos.qIdx];
-      const currGross = gross15[pos.dayIdx][pos.qIdx];
-      // For ultra-low-volume overnight intervals (req <= 2), 1 agent absorbs minor call volume without doubling staff for break fractions
+      const currGross = grossMat[pos.dayIdx][pos.qIdx];
       const targetGross = req <= 2 ? req : req / netWeight;
       if (currGross < targetGross) {
         const fill = Math.min(1, targetGross - currGross);
@@ -1170,107 +1378,228 @@ export function generateWeeklySchedule(params: {
         score += fill * (14 + 6 * Math.min(1, shortageUrgency));
       } else {
         const excessBefore = currGross - targetGross;
-        // Scale waste penalty inversely by slot demand so overnight 1-seat intervals never hoard idle heads
         const ratioWaste = (excessBefore + 1) / Math.max(0.8, targetGross);
         const quietExtra = req <= 2 ? 5.2 + 3.0 * excessBefore : 1.35;
         score -= quietExtra + ratioWaste * (req <= 2 ? 4.5 : 1.6);
       }
     }
+    const dayOv = dayOverridesMap.get(candidate.id)?.get(dayIdx);
+    if (dayOv !== undefined) {
+      const currCnt = shCounts.get(candidate.id)?.[dayIdx] ?? 0;
+      if (currCnt < dayOv) score += 280 + (dayOv - currCnt) * 40;
+      else score -= 320;
+    }
     return score;
   };
 
-  // 4A. Honor Explicit Per-Shift Manual Pool Overrides First (e.g. pin "22:00-07:00": 2 Agents)
-  const pinnedRosterIndices = new Set<number>();
-  const autoAllowedShifts = catalogToUse.filter((sh) => {
-    const ov = overrides[sh.id];
-    return ov === undefined || ov === null;
-  });
-
-  // Order remaining agents for pinning cleanly across distributed OFF pairs so pinned shifts span Mon..Sun evenly
-  let pinCursor = 0;
-  for (const sh of catalogToUse) {
-    const rawOv = overrides[sh.id];
-    if (rawOv === undefined || rawOv === null) continue;
-    const pinTarget = Math.max(0, Math.round(rawOv));
-    let assignedHere = 0;
-    while (assignedHere < pinTarget && pinCursor < activeIndices.length) {
-      const rosterIdx = activeIndices[pinCursor++];
-      pinnedRosterIndices.add(rosterIdx);
-      const row = draftRows[rosterIdx];
-      for (let dIdx = 0; dIdx < 7; dIdx++) {
-        const dk = WEEK_DAYS[dIdx];
-        if (row.assignments[dk].status !== 'WORK') continue;
-        row.assignments[dk].shiftId = sh.id;
-        for (const pos of getShiftSlotsForDay(sh, dIdx)) {
-          gross15[pos.dayIdx][pos.qIdx] += 1;
+  // Helper returning shifts an unpinned Auto agent is allowed to work on dayIdx.
+  // Never leaks into pinned shifts unless a manual daily pin exceeds pinned pool on that specific day.
+  const getAllowedShiftsOnDay = (dayIdx: number, currentShiftId?: string | null): ShiftTemplate[] => {
+    const allowed: ShiftTemplate[] = [];
+    const seen = new Set<string>();
+    for (const sh of primaryAutoPool) {
+      allowed.push(sh);
+      seen.add(sh.id);
+    }
+    for (const sh of catalogToUse) {
+      if (seen.has(sh.id)) continue;
+      const explicitDayTgt = dayOverridesMap.get(sh.id)?.get(dayIdx);
+      if (explicitDayTgt !== undefined) {
+        const currCnt = shiftDayCounts.get(sh.id)?.[dayIdx] ?? 0;
+        if (sh.id === currentShiftId || currCnt < explicitDayTgt) {
+          allowed.push(sh);
+          seen.add(sh.id);
         }
       }
-      assignedHere++;
+    }
+    return allowed;
+  };
+
+  // 5A. Compute Aggregate Daily Shift-Demand Blueprint for Auto Pool (Free of Initial Agent Drift Lockouts)
+  const simGross = gross15.map((row) => [...row]);
+  const simShCounts = new Map<string, number[]>();
+  for (const sh of catalogToUse) simShCounts.set(sh.id, [...(shiftDayCounts.get(sh.id) ?? new Array(7).fill(0))]);
+
+  const blueprintCount = new Map<string, number[]>();
+  for (const sh of catalogToUse) blueprintCount.set(sh.id, new Array<number>(7).fill(0));
+
+  for (let dIdx = 0; dIdx < 7; dIdx++) {
+    const available = autoDayWorkCount[dIdx];
+    for (let k = 0; k < available; k++) {
+      const allowedDay = catalogToUse.filter((sh) => {
+        if (primaryAutoPool.some((p) => p.id === sh.id)) return true;
+        const explicitTgt = dayOverridesMap.get(sh.id)?.get(dIdx);
+        return explicitTgt !== undefined && (simShCounts.get(sh.id)?.[dIdx] ?? 0) < explicitTgt;
+      });
+      let bestSh = allowedDay[0] ?? primaryAutoPool[0];
+      let bestSc = -Infinity;
+      for (const cand of allowedDay) {
+        const sc = scoreShiftDeltaWithDayOv(cand, dIdx, simGross, simShCounts);
+        if (sc > bestSc) {
+          bestSc = sc;
+          bestSh = cand;
+        }
+      }
+      blueprintCount.get(bestSh.id)![dIdx] += 1;
+      simShCounts.get(bestSh.id)![dIdx] += 1;
+      for (const pos of getShiftSlotsForDay(bestSh, dIdx)) {
+        simGross[pos.dayIdx][pos.qIdx] += 1;
+      }
     }
   }
 
-  // Fallback shift pool for auto agents: prefer unpinned active shifts; if user pinned every shift below headcount, spread overflow across non-zero shifts
-  const nonZeroCatalog = catalogToUse.filter((sh) => overrides[sh.id] !== 0);
-  const autoCandidates =
-    autoAllowedShifts.length > 0
-      ? autoAllowedShifts
-      : nonZeroCatalog.length > 0
-        ? nonZeroCatalog
-        : catalogToUse;
+  // Assign each Auto agent an anchor shift proportional to the aggregate weekly blueprint share
+  const anchorPoolQueue: ShiftTemplate[] = [];
+  if (autoActiveIndices.length > 0) {
+    const totalBlueprintShifts = catalogToUse.reduce(
+      (s, sh) => s + blueprintCount.get(sh.id)!.reduce((a, b) => a + b, 0),
+      0
+    );
+    const quotas = primaryAutoPool.map((sh) => {
+      const bpTotal = blueprintCount.get(sh.id)!.reduce((a, b) => a + b, 0);
+      const exact = totalBlueprintShifts > 0 ? (bpTotal / totalBlueprintShifts) * autoActiveIndices.length : 0;
+      return { sh, base: Math.floor(exact), frac: exact - Math.floor(exact) };
+    });
+    let assignedAnchors = quotas.reduce((s, q) => s + q.base, 0);
+    for (const q of quotas) {
+      for (let c = 0; c < q.base; c++) anchorPoolQueue.push(q.sh);
+    }
+    const byFrac = [...quotas].sort((a, b) => b.frac - a.frac);
+    let idxF = 0;
+    while (assignedAnchors < autoActiveIndices.length && byFrac.length > 0) {
+      anchorPoolQueue.push(byFrac[idxF % byFrac.length].sh);
+      assignedAnchors++;
+      idxF++;
+    }
+  }
 
-  // 4B. Demand-Proportional Greedy Water-Filling across Unpinned Active Agents
+  // 5B. Initialize Unpinned Auto Agents Guided by Anchor + Blueprint + Marginal Interval Demand
+  const blueprintRemaining = new Map<string, number[]>();
+  for (const sh of catalogToUse) {
+    blueprintRemaining.set(sh.id, [...(blueprintCount.get(sh.id) ?? new Array(7).fill(0))]);
+  }
   const sortedDayIndices = [0, 1, 2, 3, 4, 5, 6].sort(
     (a, b) => profiles[WEEK_DAYS[b]].forecastVolume - profiles[WEEK_DAYS[a]].forecastVolume
   );
 
-  for (const rosterIdx of activeIndices) {
-    if (pinnedRosterIndices.has(rosterIdx)) continue;
+  autoActiveIndices.forEach((rosterIdx, autoSeqIdx) => {
     const row = draftRows[rosterIdx];
+    const anchor = anchorPoolQueue[autoSeqIdx] ?? primaryAutoPool[0];
     for (const dIdx of sortedDayIndices) {
       const dk = WEEK_DAYS[dIdx];
       if (row.assignments[dk].status !== 'WORK') continue;
-
-      let bestShift = autoCandidates[0];
+      const dayCandidates = getAllowedShiftsOnDay(dIdx);
+      let bestShift = dayCandidates.find((c) => isCandidateShiftFeasible(row, dIdx, c)) ?? primaryAutoPool[0];
       let bestScore = -Infinity;
-      for (const candidate of autoCandidates) {
-        if (!isCandidateShiftFeasible(row, dIdx, candidate)) continue;
-        const sc = scoreShiftDelta(candidate, dIdx);
+
+      for (const cand of dayCandidates) {
+        if (!isCandidateShiftFeasible(row, dIdx, cand)) continue;
+        let sc = scoreShiftDeltaWithDayOv(cand, dIdx, gross15, shiftDayCounts);
+        // Guide agent onto their stratified anchor band & unfilled aggregate blueprint counts
+        const bpLeft = blueprintRemaining.get(cand.id)?.[dIdx] ?? 0;
+        if (bpLeft > 0) sc += 18 + Math.min(20, bpLeft * 2.5);
+        const startDiff = computeCircularStartSpanHours([anchor.startMin, cand.startMin]);
+        if (cand.id === anchor.id) sc += 14;
+        else if (startDiff <= rules.maxWeeklyStartDriftHours) sc += 6 - startDiff * 1.5;
+
         if (sc > bestScore) {
           bestScore = sc;
-          bestShift = candidate;
+          bestShift = cand;
         }
       }
 
       row.assignments[dk].shiftId = bestShift.id;
+      shiftDayCounts.get(bestShift.id)![dIdx] += 1;
+      const bpArr = blueprintRemaining.get(bestShift.id);
+      if (bpArr && bpArr[dIdx] > 0) bpArr[dIdx] -= 1;
       for (const pos of getShiftSlotsForDay(bestShift, dIdx)) {
         gross15[pos.dayIdx][pos.qIdx] += 1;
       }
     }
+  });
+
+  // 5C. Transactional Delta Cost Evaluator & Joint Multi-Move Local Optimizer
+  interface DayMutation {
+    dayIdx: number;
+    oldShift: ShiftTemplate | null;
+    newShift: ShiftTemplate | null;
   }
 
-  // 5. Local Optimization Swap Pass (2 sweeps: proportional deficit/waste balance, preserving manual shift pins)
-  const objectiveError = () => {
-    let err = 0;
-    for (let d = 0; d < 7; d++) {
-      for (let q = 0; q < 96; q++) {
-        const req = req15[d][q];
-        const targetG = req <= 2 ? req : req / 0.889;
-        const diff = targetG - gross15[d][q];
-        if (diff > 0) {
-          err += diff * diff * 5.0;
-        } else {
-          const ex = -diff;
-          err += ex * (1.2 + 5.2 / Math.max(0.8, req)) + ex * ex * (req <= 2 ? 3.5 : 0.18);
+  const computeDeltaCost = (mutations: DayMutation[]): number => {
+    const slotDelta = new Map<number, number>(); // key = d * 96 + q
+    const countDelta = new Map<string, number>(); // key = `${shId}|${dIdx}`
+
+    for (const m of mutations) {
+      if (m.oldShift && m.newShift && m.oldShift.id === m.newShift.id) continue;
+      if (m.oldShift) {
+        const ck = `${m.oldShift.id}\0${m.dayIdx}`;
+        countDelta.set(ck, (countDelta.get(ck) ?? 0) - 1);
+        for (const pos of getShiftSlotsForDay(m.oldShift, m.dayIdx)) {
+          const sk = pos.dayIdx * 96 + pos.qIdx;
+          slotDelta.set(sk, (slotDelta.get(sk) ?? 0) - 1);
+        }
+      }
+      if (m.newShift) {
+        const ck = `${m.newShift.id}\0${m.dayIdx}`;
+        countDelta.set(ck, (countDelta.get(ck) ?? 0) + 1);
+        for (const pos of getShiftSlotsForDay(m.newShift, m.dayIdx)) {
+          const sk = pos.dayIdx * 96 + pos.qIdx;
+          slotDelta.set(sk, (slotDelta.get(sk) ?? 0) + 1);
         }
       }
     }
-    return err;
+
+    let delta = 0;
+    for (const [sk, dv] of slotDelta.entries()) {
+      if (dv === 0) continue;
+      const d = Math.floor(sk / 96);
+      const q = sk % 96;
+      const req = req15[d][q];
+      const currG = gross15[d][q];
+      delta += intervalCost(req, currG + dv) - intervalCost(req, currG);
+    }
+    for (const [ck, dc] of countDelta.entries()) {
+      if (dc === 0) continue;
+      const sep = ck.indexOf('\0');
+      const shId = ck.slice(0, sep);
+      const dIdx = Number(ck.slice(sep + 1));
+      const currCnt = shiftDayCounts.get(shId)?.[dIdx] ?? 0;
+      delta += dayOverrideCost(shId, dIdx, currCnt + dc) - dayOverrideCost(shId, dIdx, currCnt);
+    }
+    return delta;
   };
 
-  for (let pass = 0; pass < 2; pass++) {
+  const applyMutationsToMatrices = (mutations: DayMutation[]) => {
+    for (const m of mutations) {
+      if (m.oldShift && m.newShift && m.oldShift.id === m.newShift.id) continue;
+      if (m.oldShift) {
+        shiftDayCounts.get(m.oldShift.id)![m.dayIdx] -= 1;
+        for (const pos of getShiftSlotsForDay(m.oldShift, m.dayIdx)) {
+          gross15[pos.dayIdx][pos.qIdx] -= 1;
+        }
+      }
+      if (m.newShift) {
+        shiftDayCounts.get(m.newShift.id)![m.dayIdx] += 1;
+        for (const pos of getShiftSlotsForDay(m.newShift, m.dayIdx)) {
+          gross15[pos.dayIdx][pos.qIdx] += 1;
+        }
+      }
+    }
+  };
+
+  const getRowOffPair = (row: ScheduledAgentRow): [number, number] | null => {
+    const offs: number[] = [];
+    for (let d = 0; d < 7; d++) {
+      if (row.assignments[WEEK_DAYS[d]].status === 'OFF') offs.push(d);
+    }
+    return offs.length === 2 ? [offs[0], offs[1]] : null;
+  };
+
+  for (let sweep = 0; sweep < 4; sweep++) {
     let improved = false;
-    for (const rosterIdx of activeIndices) {
-      if (pinnedRosterIndices.has(rosterIdx)) continue;
+
+    // Move 1: Single-Day Shift Optimization across Unpinned Auto Agents
+    for (const rosterIdx of autoActiveIndices) {
       const row = draftRows[rosterIdx];
       for (let dIdx = 0; dIdx < 7; dIdx++) {
         const dk = WEEK_DAYS[dIdx];
@@ -1279,28 +1608,167 @@ export function generateWeeklySchedule(params: {
         const currShift = shiftMap.get(currShiftId);
         if (!currShift) continue;
 
-        let bestShift = currShift;
-        let bestErr = objectiveError();
+        let bestCand = currShift;
+        let bestDelta = -0.02;
+        const dayCandidates = getAllowedShiftsOnDay(dIdx, currShift.id);
 
-        for (const pos of getShiftSlotsForDay(currShift, dIdx)) gross15[pos.dayIdx][pos.qIdx] -= 1;
-
-        for (const cand of autoCandidates) {
+        for (const cand of dayCandidates) {
           if (cand.id === currShift.id) continue;
           if (!isCandidateShiftFeasible(row, dIdx, cand)) continue;
-          for (const pos of getShiftSlotsForDay(cand, dIdx)) gross15[pos.dayIdx][pos.qIdx] += 1;
-          const e = objectiveError();
-          for (const pos of getShiftSlotsForDay(cand, dIdx)) gross15[pos.dayIdx][pos.qIdx] -= 1;
-          if (e < bestErr - 0.01) {
-            bestErr = e;
-            bestShift = cand;
-            improved = true;
+          const dCost = computeDeltaCost([{ dayIdx: dIdx, oldShift: currShift, newShift: cand }]);
+          if (dCost < bestDelta) {
+            bestDelta = dCost;
+            bestCand = cand;
           }
         }
 
-        row.assignments[dk].shiftId = bestShift.id;
-        for (const pos of getShiftSlotsForDay(bestShift, dIdx)) gross15[pos.dayIdx][pos.qIdx] += 1;
+        if (bestCand.id !== currShift.id) {
+          applyMutationsToMatrices([{ dayIdx: dIdx, oldShift: currShift, newShift: bestCand }]);
+          row.assignments[dk].shiftId = bestCand.id;
+          improved = true;
+        }
       }
     }
+
+    // Move 2: OFF-Pattern Slide (All Active Agents, Pinned & Auto)
+    // Balances Mon..Sun demand & satisfies explicit Saturday/weekday daily overrides cleanly
+    for (const rosterIdx of activeIndices) {
+      const row = draftRows[rosterIdx];
+      const currOff = getRowOffPair(row);
+      if (!currOff) continue;
+      const pinnedSh = pinnedPoolShiftByRosterIdx.get(rosterIdx) ?? null;
+
+      let bestPair: [number, number] | null = null;
+      let bestMutations: DayMutation[] | null = null;
+      let bestNextAssignments: Record<DayKey, AgentDayAssignment> | null = null;
+      let bestDelta = -0.05;
+
+      for (const nextOff of offPatterns) {
+        if (nextOff[0] === currOff[0] && nextOff[1] === currOff[1]) continue;
+
+        const nextAssignments: Record<DayKey, AgentDayAssignment> = { ...row.assignments };
+        const mutations: DayMutation[] = [];
+
+        // Turn newly OFF days from WORK -> OFF
+        const becomeOff = currOff.length === 2 ? nextOff.filter((d) => !currOff.includes(d)) : [];
+        const becomeWork = currOff.filter((d) => !nextOff.includes(d));
+
+        for (const dOff of becomeOff) {
+          const dk = WEEK_DAYS[dOff];
+          const oldId = row.assignments[dk].shiftId;
+          const oldSh = oldId ? shiftMap.get(oldId) ?? null : null;
+          if (oldSh) mutations.push({ dayIdx: dOff, oldShift: oldSh, newShift: null });
+          nextAssignments[dk] = { dayKey: dk, status: 'OFF', shiftId: null, breaks: null };
+        }
+
+        // Fill newly WORK days cleanly respecting fixed pinned shift or Auto feasibility
+        let validPattern = true;
+        for (const dWork of becomeWork) {
+          const dk = WEEK_DAYS[dWork];
+          if (pinnedSh) {
+            if (!isCandidateShiftFeasible(row, dWork, pinnedSh, nextAssignments)) {
+              validPattern = false;
+              break;
+            }
+            nextAssignments[dk] = { dayKey: dk, status: 'WORK', shiftId: pinnedSh.id, breaks: null };
+            mutations.push({ dayIdx: dWork, oldShift: null, newShift: pinnedSh });
+          } else {
+            const cands = getAllowedShiftsOnDay(dWork);
+            let chosen: ShiftTemplate | null = null;
+            let bestSingleCost = Infinity;
+            for (const cand of cands) {
+              if (!isCandidateShiftFeasible(row, dWork, cand, nextAssignments)) continue;
+              const cDelta = computeDeltaCost([...mutations, { dayIdx: dWork, oldShift: null, newShift: cand }]);
+              if (cDelta < bestSingleCost) {
+                bestSingleCost = cDelta;
+                chosen = cand;
+              }
+            }
+            if (!chosen) {
+              validPattern = false;
+              break;
+            }
+            nextAssignments[dk] = { dayKey: dk, status: 'WORK', shiftId: chosen.id, breaks: null };
+            mutations.push({ dayIdx: dWork, oldShift: null, newShift: chosen });
+          }
+        }
+        if (!validPattern) continue;
+
+        const minRest = getMinimumWeeklyRestHours(nextAssignments, shiftMap);
+        if (minRest !== null && minRest < rules.minInterShiftRestHours - 1e-6) continue;
+
+        const delta = computeDeltaCost(mutations);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          bestPair = nextOff;
+          bestMutations = mutations;
+          bestNextAssignments = nextAssignments;
+        }
+      }
+
+      if (bestPair && bestMutations && bestNextAssignments) {
+        applyMutationsToMatrices(bestMutations);
+        row.assignments = bestNextAssignments;
+        improved = true;
+      }
+    }
+
+    // Move 3: Whole-Week Band Shift on Unpinned Auto Agents (Escapes Drift Band Traps)
+    if (sweep < 3) {
+      for (const rosterIdx of autoActiveIndices) {
+        const row = draftRows[rosterIdx];
+        const workDays: { dayIdx: number; shift: ShiftTemplate }[] = [];
+        for (let d = 0; d < 7; d++) {
+          const a = row.assignments[WEEK_DAYS[d]];
+          if (a.status === 'WORK' && a.shiftId) {
+            const sh = shiftMap.get(a.shiftId);
+            if (sh) workDays.push({ dayIdx: d, shift: sh });
+          }
+        }
+        if (workDays.length === 0) continue;
+
+        let bestAnchorShift: ShiftTemplate | null = null;
+        let bestMutations: DayMutation[] | null = null;
+        let bestDelta = -0.5;
+
+        for (const targetSh of primaryAutoPool) {
+          if (workDays.every((w) => w.shift.id === targetSh.id)) continue;
+          const mutations = workDays.map((w) => ({
+            dayIdx: w.dayIdx,
+            oldShift: w.shift,
+            newShift: targetSh,
+          }));
+          // Uniform shift across the week has 0h drift; verify rest still holds (e.g. >12h shift durations)
+          const testAssignments = { ...row.assignments };
+          for (const w of workDays) {
+            testAssignments[WEEK_DAYS[w.dayIdx]] = {
+              dayKey: WEEK_DAYS[w.dayIdx],
+              status: 'WORK',
+              shiftId: targetSh.id,
+              breaks: null,
+            };
+          }
+          const minRest = getMinimumWeeklyRestHours(testAssignments, shiftMap);
+          if (minRest !== null && minRest < rules.minInterShiftRestHours - 1e-6) continue;
+
+          const delta = computeDeltaCost(mutations);
+          if (delta < bestDelta) {
+            bestDelta = delta;
+            bestAnchorShift = targetSh;
+            bestMutations = mutations;
+          }
+        }
+
+        if (bestAnchorShift && bestMutations) {
+          applyMutationsToMatrices(bestMutations);
+          for (const w of workDays) {
+            row.assignments[WEEK_DAYS[w.dayIdx]].shiftId = bestAnchorShift.id;
+          }
+          improved = true;
+        }
+      }
+    }
+
     if (!improved) break;
   }
 

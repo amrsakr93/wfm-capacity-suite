@@ -2017,14 +2017,15 @@ export async function buildSchedulingWorkbook(params: {
   const shiftMatrixTableRows = [
     ...shiftMixRows.map((m) => [
       m.shiftLabel,
-      m.targetOverride !== null ? `Manual (${m.targetOverride})` : `Auto (${m.assignedPoolCount})`,
-      m.byDay.Mon,
-      m.byDay.Tue,
-      m.byDay.Wed,
-      m.byDay.Thu,
-      m.byDay.Fri,
-      m.byDay.Sat,
-      m.byDay.Sun,
+      m.targetOverride !== null
+        ? `Manual (${m.targetOverride})`
+        : m.dayOverrides && Object.keys(m.dayOverrides).length > 0
+          ? `Day Pins (${m.assignedPoolCount})`
+          : `Auto (${m.assignedPoolCount})`,
+      ...WEEK_DAYS.map((dk) => {
+        const dPin = m.dayOverrides?.[dk];
+        return dPin !== undefined && dPin !== null ? `${m.byDay[dk]} [Pin:${dPin}]` : m.byDay[dk];
+      }),
       m.totalWeeklyShifts,
       m.shareOfShiftsPct,
     ]),

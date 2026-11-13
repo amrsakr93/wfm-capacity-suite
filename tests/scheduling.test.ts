@@ -433,4 +433,148 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
     const buf = await wb.xlsx.writeBuffer();
     assert.ok(buf.byteLength > 5000);
   });
+
+  it('strictly isolates pinned shifts when an Auto shift remains and routes surplus strictly away from overnight when all shifts are pinned', () => {
+    const catalog8 = parseShiftCatalogText(
+      [
+        '00:00-09:00',
+        '07:00-16:00',
+        '08:00-17:00',
+        '09:00-18:00',
+        '10:00-19:00',
+        '12:00-21:00',
+        '13:00-22:00',
+        '15:00-00:00',
+      ].join('\n')
+    );
+
+    // Case A: 7 shifts pinned (49 heads), 1 shift left Auto ('15:00-00:00'), 58 active heads -> all 9 remaining MUST go to '15:00-00:00'
+    const rulesWithOneAuto: SchedulingRules = {
+      ...DEFAULT_SCHEDULING_RULES,
+      shiftHeadcountOverrides: {
+        '00:00-09:00': 1,
+        '07:00-16:00': 4,
+        '08:00-17:00': 15,
+        '09:00-18:00': 12,
+        '10:00-19:00': 7,
+        '12:00-21:00': 5,
+        '13:00-22:00': 5,
+      },
+    };
+    const resOneAuto = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 66,
+      namedAgents: [],
+      leaveCounts: { annual: 6, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: catalog8,
+      rules: rulesWithOneAuto,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+    const mixA = new Map(resOneAuto.shiftDailyMix.map((m) => [m.shiftId, m]));
+    assert.equal(mixA.get('00:00-09:00')?.assignedPoolCount, 1);
+    assert.equal(mixA.get('07:00-16:00')?.assignedPoolCount, 4);
+    assert.equal(mixA.get('08:00-17:00')?.assignedPoolCount, 15);
+    assert.equal(mixA.get('09:00-18:00')?.assignedPoolCount, 12);
+    assert.equal(mixA.get('15:00-00:00')?.assignedPoolCount, 9);
+
+    // Stratified OFF check: 07:00-16:00 pinned at 4 must NOT dump all 4 into Sat+Sun OFF (weekend > 0)
+    const early07 = mixA.get('07:00-16:00')!;
+    assert.ok(early07.byDay.Sat > 0 && early07.byDay.Sun > 0, `Expected non-zero weekend coverage on 07:00-16:00, got Sat=${early07.byDay.Sat}, Sun=${early07.byDay.Sun}`);
+
+    // Case B: ALL 8 shifts pinned summing to 54 (< 58 active), leaving 4 unpinned overflow -> overnight '00:00-09:00' stays strictly at 1
+    const rulesAllPinned: SchedulingRules = {
+      ...DEFAULT_SCHEDULING_RULES,
+      shiftHeadcountOverrides: {
+        '00:00-09:00': 1,
+        '07:00-16:00': 4,
+        '08:00-17:00': 15,
+        '09:00-18:00': 12,
+        '10:00-19:00': 7,
+        '12:00-21:00': 5,
+        '13:00-22:00': 5,
+        '15:00-00:00': 5,
+      },
+    };
+    const resAllPinned = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 66,
+      namedAgents: [],
+      leaveCounts: { annual: 6, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: catalog8,
+      rules: rulesAllPinned,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+    const mixB = new Map(resAllPinned.shiftDailyMix.map((m) => [m.shiftId, m]));
+    assert.equal(mixB.get('00:00-09:00')?.assignedPoolCount, 1);
+    assert.equal(resAllPinned.summary.violationAgentsCount, 0);
+  });
+
+  it('honors per-shift × per-day manual overrides (e.g. Saturday override) with zero WFM rule violations', () => {
+    const rulesWithDayPin: SchedulingRules = {
+      ...DEFAULT_SCHEDULING_RULES,
+      shiftHeadcountOverrides: {
+        '08:00-17:00': 12,
+      },
+      shiftDayHeadcountOverrides: {
+        '08:00-17:00': { Sat: 8, Sun: 7 },
+      },
+    };
+    const res = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 45,
+      namedAgents: [],
+      leaveCounts: { annual: 3, maternity: 0, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: DEFAULT_SHIFT_CATALOG,
+      rules: rulesWithDayPin,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+    const row08 = res.shiftDailyMix.find((m) => m.shiftId === '08:00-17:00');
+    assert.ok(row08);
+    assert.equal(row08.assignedPoolCount, 12);
+    assert.equal(row08.byDay.Sat, 8);
+    assert.equal(row08.byDay.Sun, 7);
+    assert.deepEqual(row08.dayOverrides, { Sat: 8, Sun: 7 });
+    assert.equal(res.summary.violationAgentsCount, 0);
+    assert.equal(res.summary.validBreakRatePct, 100);
+  });
+
+  it('auto-optimizes full 8-shift 58-agent roster with balanced Mon..Sun coverage and zero violations', () => {
+    const catalog8 = parseShiftCatalogText(
+      [
+        '00:00-09:00',
+        '07:00-16:00',
+        '08:00-17:00',
+        '09:00-18:00',
+        '10:00-19:00',
+        '12:00-21:00',
+        '13:00-22:00',
+        '15:00-00:00',
+      ].join('\n')
+    );
+    const res = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 66,
+      namedAgents: [],
+      leaveCounts: { annual: 6, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: catalog8,
+      rules: DEFAULT_SCHEDULING_RULES,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    assert.equal(res.summary.activeSchedulableCount, 58);
+    assert.equal(res.summary.violationAgentsCount, 0);
+    assert.equal(res.summary.validBreakRatePct, 100);
+    // Overnight 00:00-09:00 stays lean (not overloaded) and every weekday has positive staffed hours
+    const night00 = res.shiftDailyMix.find((m) => m.shiftId === '00:00-09:00');
+    assert.ok(night00 && night00.avgPerDay <= 2.5);
+    assert.ok(res.summary.projectedWeeklySlPct >= 75);
+  });
 });

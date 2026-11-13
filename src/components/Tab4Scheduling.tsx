@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
   CalendarClock,
@@ -41,6 +42,7 @@ import {
   buildBreakAssignment,
   computeCircularStartSpanHours,
   formatMinutesHHMM,
+  isOvernightShiftWindow,
   parseAgentRosterFile,
   parseAgentRosterText,
   parseShiftCatalogFile,
@@ -144,8 +146,23 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
   const [editingNameAgentId, setEditingNameAgentId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
 
-  // Active inline popover editor for any Agent × Day cell
+  // Active inline popover editor for any Agent × Day cell + multi-day bulk selection scope
   const [editingCell, setEditingCell] = useState<{ agentId: string; dayKey: DayKey } | null>(null);
+  const [selectedPopoverDays, setSelectedPopoverDays] = useState<DayKey[]>(['Mon']);
+
+  const openCellEditor = (agentId: string, dayKey: DayKey) => {
+    setEditingCell({ agentId, dayKey });
+    setSelectedPopoverDays([dayKey]);
+  };
+
+  const togglePopoverDay = (dayKey: DayKey) => {
+    setSelectedPopoverDays((prev) => {
+      if (prev.includes(dayKey)) {
+        return prev.length > 1 ? prev.filter((d) => d !== dayKey) : prev;
+      }
+      return WEEK_DAYS.filter((d) => d === dayKey || prev.includes(d));
+    });
+  };
 
   const sortedCatalog = useMemo(() => sortShiftCatalogChronologically(shiftCatalog), [shiftCatalog]);
   const shiftMap = useMemo(() => new Map(sortedCatalog.map((s) => [s.id, s])), [sortedCatalog]);
@@ -274,10 +291,20 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
 
   const applyCellAssignment = (
     agentId: string,
-    dayKey: DayKey,
+    targetDays: DayKey | DayKey[],
     nextAssign: Partial<AgentDayAssignment>,
     applyFullWeek = false
   ) => {
+    const daysList = applyFullWeek
+      ? WEEK_DAYS
+      : Array.isArray(targetDays)
+        ? targetDays.length > 0
+          ? targetDays
+          : editingCell
+            ? [editingCell.dayKey]
+            : ['Mon' as DayKey]
+        : [targetDays];
+
     const updated = scheduleResult.agents.map((a) => {
       if (a.agentId !== agentId) return a;
       const nextAssignments = { ...a.assignments };
@@ -298,47 +325,63 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
         };
       }
 
-      const prevCell = a.assignments[dayKey];
-      const merged: AgentDayAssignment = {
-        ...prevCell,
-        ...nextAssign,
-        dayKey,
-        isManualOverride: true,
-      };
-      if (merged.status !== 'WORK') {
-        merged.shiftId = null;
-        merged.breaks = null;
-      } else if (merged.shiftId && !merged.breaks) {
-        const sh = shiftMap.get(merged.shiftId);
-        if (sh) {
-          const surplus15 = new Array<number>(96).fill(2);
-          merged.breaks = assignOptimalBreaksForShift(sh, surplus15, rules.breakRules);
+      for (const dk of daysList) {
+        const prevCell = a.assignments[dk];
+        const merged: AgentDayAssignment = {
+          ...prevCell,
+          ...nextAssign,
+          dayKey: dk,
+          isManualOverride: true,
+        };
+        if (merged.status !== 'WORK') {
+          merged.shiftId = null;
+          merged.breaks = null;
+        } else if (merged.shiftId && !merged.breaks) {
+          const sh = shiftMap.get(merged.shiftId);
+          if (sh) {
+            const surplus15 = new Array<number>(96).fill(2);
+            merged.breaks = assignOptimalBreaksForShift(sh, surplus15, rules.breakRules);
+          }
         }
+        nextAssignments[dk] = merged;
       }
-      nextAssignments[dayKey] = merged;
-      const allEx = WEEK_DAYS.every((dk) => nextAssignments[dk].status !== 'WORK' && nextAssignments[dk].status !== 'OFF');
+
+      const firstStatus = nextAssignments[daysList[0]].status;
+      const allEx = WEEK_DAYS.every(
+        (dk) => nextAssignments[dk].status !== 'WORK' && nextAssignments[dk].status !== 'OFF'
+      );
+      const uniformEx =
+        allEx && WEEK_DAYS.every((dk) => nextAssignments[dk].status === firstStatus)
+          ? (firstStatus as ExceptionCode)
+          : null;
       return {
         ...a,
-        preAllocatedException: allEx ? (merged.status as ExceptionCode) : null,
+        preAllocatedException: uniformEx,
         assignments: nextAssignments,
       };
     });
     onUpdateRosterAgents(updated);
   };
 
-  // Pre-flight rule check for shift dropdown in Popover
-  const previewShiftCompatibility = (agent: ScheduledAgentRow, dayKey: DayKey, cand: ShiftTemplate) => {
+  // Pre-flight rule check across all currently selected popover days
+  const previewShiftCompatibility = (
+    agent: ScheduledAgentRow,
+    targetDays: DayKey | DayKey[],
+    cand: ShiftTemplate
+  ) => {
+    const daysList = Array.isArray(targetDays) ? targetDays : [targetDays];
+    const nextAssignments = { ...agent.assignments };
+    for (const dk of daysList) {
+      nextAssignments[dk] = {
+        dayKey: dk,
+        status: 'WORK',
+        shiftId: cand.id,
+        breaks: null,
+      };
+    }
     const tempRow: ScheduledAgentRow = {
       ...agent,
-      assignments: {
-        ...agent.assignments,
-        [dayKey]: {
-          dayKey,
-          status: 'WORK',
-          shiftId: cand.id,
-          breaks: null,
-        },
-      },
+      assignments: nextAssignments,
     };
     const starts: number[] = [];
     for (const dk of WEEK_DAYS) {
@@ -636,9 +679,9 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
 
           {/* Pool Readiness & Leave Impact Bento Panel (balances card height cleanly) */}
           {(() => {
-            const capTargetRounded = Math.round(capPlanFteTarget);
-            const fteGap = summary.activeSchedulableCount - capTargetRounded;
             const totalLockedHeads = Math.min(totalRosterPool, totalExclusionsRequested);
+            const activeSharePct =
+              totalRosterPool > 0 ? (summary.activeSchedulableCount / totalRosterPool) * 100 : 0;
             const leaveShrinkPct =
               totalRosterPool > 0 ? (totalLockedHeads / totalRosterPool) * 100 : 0;
 
@@ -692,20 +735,14 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/75 px-3 py-2">
                     <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      Vs Tab 3 Cap Plan Target
+                      Active Schedulable Share
                     </div>
                     <div className="mt-0.5 flex items-baseline justify-between gap-2">
                       <span className="text-sm font-mono font-extrabold text-slate-900 dark:text-white">
-                        {summary.activeSchedulableCount} / {capTargetRounded} FTE
+                        {summary.activeSchedulableCount} / {totalRosterPool} Heads
                       </span>
-                      <span
-                        className={`text-[11px] font-mono font-bold ${
-                          fteGap >= 0
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-amber-600 dark:text-amber-400'
-                        }`}
-                      >
-                        {fteGap >= 0 ? `+${fteGap} Surplus` : `${fteGap} Gap`}
+                      <span className="text-[11px] font-mono font-bold text-sky-600 dark:text-sky-400">
+                        {activeSharePct.toFixed(1)}% Ready
                       </span>
                     </div>
                   </div>
@@ -841,26 +878,70 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
           )}
 
           {/* Elevated Chronological Shift Catalog Grid + Manual Per-Shift Headcount Control */}
-          <div className="space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                <span>Shift Catalog &amp; Scheduled Headcount Control</span>
-                <span className="rounded-full border border-sky-500/35 bg-sky-500/10 px-2 py-0.5 text-[10px] font-mono font-bold text-sky-600 dark:text-sky-300 normal-case">
-                  Auto-Sorted 00:00 → 23:59
-                </span>
-              </div>
-              {Object.values(rules.shiftHeadcountOverrides ?? {}).some(
-                (v) => v != null && Number.isFinite(v)
-              ) && (
-                <button
-                  type="button"
-                  onClick={() => setRules((r) => ({ ...r, shiftHeadcountOverrides: {} }))}
-                  className="cnx-pill-interactive rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
-                >
-                  Reset All Pins to Auto
-                </button>
-              )}
-            </div>
+          {(() => {
+            const ovMap = rules.shiftHeadcountOverrides ?? {};
+            const pinnedPoolSum = enabledShifts.reduce((acc, sh) => {
+              const v = ovMap[sh.id];
+              return v != null && Number.isFinite(v) ? acc + Math.max(0, Math.round(v)) : acc;
+            }, 0);
+            const hasAnyPin = Object.values(ovMap).some((v) => v != null && Number.isFinite(v));
+            const hasAnyAutoShift = enabledShifts.some(
+              (sh) => ovMap[sh.id] == null || !Number.isFinite(ovMap[sh.id]!)
+            );
+            const remainingAuto = Math.max(0, summary.activeSchedulableCount - pinnedPoolSum);
+            const hasDaytimeFallback = enabledShifts.some(
+              (sh) => ovMap[sh.id] !== 0 && !isOvernightShiftWindow(sh)
+            );
+
+            return (
+              <div className="space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    <span>Shift Catalog &amp; Scheduled Headcount Control</span>
+                    <span className="rounded-full border border-sky-500/35 bg-sky-500/10 px-2 py-0.5 text-[10px] font-mono font-bold text-sky-600 dark:text-sky-300 normal-case">
+                      Auto-Sorted 00:00 → 23:59
+                    </span>
+                    <span
+                      className={`rounded-full border px-2.5 py-0.5 text-[10.5px] font-mono font-bold normal-case ${
+                        pinnedPoolSum > summary.activeSchedulableCount
+                          ? 'border-rose-500/45 bg-rose-500/12 text-rose-600 dark:text-rose-300'
+                          : hasAnyPin
+                            ? 'border-amber-500/45 bg-amber-500/12 text-amber-700 dark:text-amber-300'
+                            : 'border-sky-500/35 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                      }`}
+                    >
+                      Pinned: {pinnedPoolSum} / {summary.activeSchedulableCount} Active Pool · {remainingAuto} Remaining Auto
+                    </span>
+                  </div>
+                  {hasAnyPin && (
+                    <button
+                      type="button"
+                      onClick={() => setRules((r) => ({ ...r, shiftHeadcountOverrides: {} }))}
+                      className="cnx-pill-interactive rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
+                    >
+                      Reset All Pins to Auto
+                    </button>
+                  )}
+                </div>
+
+                {pinnedPoolSum > summary.activeSchedulableCount ? (
+                  <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                    Manual pins total ({pinnedPoolSum}) exceeds Active Pool ({summary.activeSchedulableCount}). Extra pins are capped at active availability.
+                  </div>
+                ) : hasAnyPin && !hasAnyAutoShift && remainingAuto > 0 ? (
+                  <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] font-semibold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600 dark:text-amber-300" />
+                    <span>
+                      All shifts pinned below Active Pool ({pinnedPoolSum} / {summary.activeSchedulableCount}) —{' '}
+                      <strong>{remainingAuto} unpinned agents</strong> are auto-routed strictly onto{' '}
+                      {hasDaytimeFallback ? 'Daytime / Peak shifts (overnight shifts protected).' : 'active non-zero shifts.'}
+                    </span>
+                  </div>
+                ) : hasAnyPin && hasAnyAutoShift && remainingAuto > 0 ? (
+                  <div className="rounded-xl border border-sky-500/30 bg-sky-500/8 px-3 py-1.5 text-[11px] text-sky-700 dark:text-sky-300 font-medium">
+                    Pinned shifts are strictly locked — all <strong>{remainingAuto} remaining heads</strong> route exclusively into your unpinned Auto shift(s).
+                  </div>
+                ) : null}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {sortedCatalog.map((shift) => {
@@ -1019,6 +1100,8 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               </button>
             </div>
           </div>
+            );
+          })()}
 
           {/* Hard WFM Constraints Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -1585,7 +1668,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                           <td key={dk} className="px-0.5 xl:px-1 py-1 text-center align-middle">
                             <button
                               type="button"
-                              onClick={() => setEditingCell({ agentId: agent.agentId, dayKey: dk })}
+                              onClick={() => openCellEditor(agent.agentId, dk)}
                               className={`cnx-pill-interactive w-full ${
                                 showBreakDetails ? 'min-h-[46px]' : 'min-h-[34px]'
                               } flex flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-center transition cursor-pointer overflow-hidden ${
@@ -1651,13 +1734,36 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
       {/* =====================================================================
           5. INLINE INTERACTIVE CELL & BREAK POPOVER EDITOR
          ===================================================================== */}
-      {editingTarget && (
+      {editingTarget && (() => {
+        const agentWorkDays = WEEK_DAYS.filter(
+          (d) => editingTarget.agent.assignments[d]?.status === 'WORK'
+        );
+        const setPresetDays = (days: DayKey[]) => {
+          setSelectedPopoverDays(days.length > 0 ? days : [editingTarget.dayKey]);
+        };
+        const isWorkdaysSelected =
+          agentWorkDays.length > 0 &&
+          selectedPopoverDays.length === agentWorkDays.length &&
+          agentWorkDays.every((d) => selectedPopoverDays.includes(d));
+        const isMonFriSelected =
+          selectedPopoverDays.length === 5 &&
+          ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].every((d) => selectedPopoverDays.includes(d as DayKey));
+        const isWeekendSelected =
+          selectedPopoverDays.length === 2 &&
+          selectedPopoverDays.includes('Sat') &&
+          selectedPopoverDays.includes('Sun');
+        const isAll7Selected = selectedPopoverDays.length === 7;
+        const isSingleDaySelected =
+          selectedPopoverDays.length === 1 && selectedPopoverDays[0] === editingTarget.dayKey;
+
+        return createPortal(
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 no-print"
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-xs p-4 no-print"
+          style={{ backgroundColor: 'rgba(11, 21, 32, 0.58)' }}
           onClick={() => setEditingCell(null)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl border border-sky-500/40 bg-white dark:bg-slate-900 p-5 shadow-2xl space-y-4 animate-slide-up"
+            className="w-full max-w-lg rounded-2xl border border-sky-500/40 bg-white dark:bg-slate-900 p-5 shadow-2xl space-y-4 animate-slide-up max-h-[92vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
@@ -1665,11 +1771,13 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                 <h4 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
                   <span>{editingTarget.agent.agentName}</span>
                   <span className="rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 px-2 py-0.5 text-xs font-mono">
-                    {editingTarget.dayKey}
+                    {selectedPopoverDays.length === 1
+                      ? selectedPopoverDays[0]
+                      : `${selectedPopoverDays.length} Days`}
                   </span>
                 </h4>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Manually switch status, pick a compatible shift from your catalog, or customize breaks.
+                  Choose which day(s) to edit below, then apply a shift, OFF/leave status, or break schedule in one click.
                 </p>
               </div>
               <button
@@ -1680,6 +1788,94 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               >
                 <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Multi-Day Scope Selector (Single Day, Workdays, Mon–Fri, Weekend, All 7 Days, or Custom Pick) */}
+            <div className="rounded-xl border border-sky-500/25 bg-sky-500/[0.05] p-2.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Apply Scope ({selectedPopoverDays.join(', ')})
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPresetDays([editingTarget.dayKey])}
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold border transition cursor-pointer ${
+                      isSingleDaySelected
+                        ? 'border-[#0088c2] bg-[#0088c2] text-white'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Only {editingTarget.dayKey}
+                  </button>
+                  {agentWorkDays.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPresetDays(agentWorkDays)}
+                      className={`rounded-md px-2 py-0.5 text-[10px] font-bold border transition cursor-pointer ${
+                        isWorkdaysSelected
+                          ? 'border-[#0088c2] bg-[#0088c2] text-white'
+                          : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      Workdays ({agentWorkDays.length}d)
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPresetDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])}
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold border transition cursor-pointer ${
+                      isMonFriSelected
+                        ? 'border-[#0088c2] bg-[#0088c2] text-white'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Mon–Fri
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPresetDays(['Sat', 'Sun'])}
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold border transition cursor-pointer ${
+                      isWeekendSelected
+                        ? 'border-[#0088c2] bg-[#0088c2] text-white'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Sat+Sun
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPresetDays([...WEEK_DAYS])}
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold border transition cursor-pointer ${
+                      isAll7Selected
+                        ? 'border-[#0088c2] bg-[#0088c2] text-white'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    All 7d
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-7 gap-1">
+                {WEEK_DAYS.map((d) => {
+                  const active = selectedPopoverDays.includes(d);
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => togglePopoverDay(d)}
+                      aria-pressed={active}
+                      className={`rounded-lg border py-1 text-[10.5px] font-mono font-bold transition cursor-pointer ${
+                        active
+                          ? 'border-[#0088c2] bg-[#0088c2] text-white shadow-xs'
+                          : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:border-sky-400'
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Day Status Pills (OFF + Exception Codes) */}
@@ -1696,7 +1892,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                         key={code}
                         type="button"
                         onClick={() =>
-                          applyCellAssignment(editingTarget.agent.agentId, editingTarget.dayKey, {
+                          applyCellAssignment(editingTarget.agent.agentId, selectedPopoverDays, {
                             status: code,
                           })
                         }
@@ -1719,7 +1915,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                   onClick={() =>
                     applyCellAssignment(
                       editingTarget.agent.agentId,
-                      editingTarget.dayKey,
+                      selectedPopoverDays,
                       { status: editingTarget.assign.status },
                       true
                     )
@@ -1734,7 +1930,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
             {/* External Shift Catalog Picker with Live Rule Guard */}
             <div>
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
-                Assign Shift (Pre-checked for ≤{rules.maxWeeklyStartDriftHours}h Drift &amp; ≥{rules.minInterShiftRestHours}h Rest)
+                Assign Shift Across {selectedPopoverDays.length} Day(s) (≤{rules.maxWeeklyStartDriftHours}h Drift &amp; ≥{rules.minInterShiftRestHours}h Rest)
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
                 {sortedCatalog.map((sh) => {
@@ -1743,7 +1939,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                     editingTarget.assign.shiftId === sh.id;
                   const compat = previewShiftCompatibility(
                     editingTarget.agent,
-                    editingTarget.dayKey,
+                    selectedPopoverDays,
                     sh
                   );
                   return (
@@ -1751,7 +1947,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                       key={sh.id}
                       type="button"
                       onClick={() =>
-                        applyCellAssignment(editingTarget.agent.agentId, editingTarget.dayKey, {
+                        applyCellAssignment(editingTarget.agent.agentId, selectedPopoverDays, {
                           status: 'WORK',
                           shiftId: sh.id,
                           breaks: assignOptimalBreaksForShift(
@@ -1800,7 +1996,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                 );
                 const updateBreaks = (o1: number, oL: number, o2: number) => {
                   const nextBr = buildBreakAssignment(activeShift, o1, oL, o2, rules.breakRules);
-                  applyCellAssignment(editingTarget.agent.agentId, editingTarget.dayKey, {
+                  applyCellAssignment(editingTarget.agent.agentId, selectedPopoverDays, {
                     breaks: nextBr,
                   });
                 };
@@ -1914,21 +2110,46 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+        );
+      })()}
 
       {/* =====================================================================
-          6. SCHEDULED HEADCOUNT PER SHIFT × PER DAY (MON → SUN)
+          6. SCHEDULED HEADCOUNT PER SHIFT × PER DAY (MON → SUN) — EDITABLE DAILY PINS
          ===================================================================== */}
+      {(() => {
+        const dayPinsAll = rules.shiftDayHeadcountOverrides ?? {};
+        const hasAnyDailyPins = Object.values(dayPinsAll).some(
+          (shMap) =>
+            shMap &&
+            Object.values(shMap).some((v) => v != null && Number.isFinite(v))
+        );
+
+        return (
       <section className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
         <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-100">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-100">
             <CalendarClock className="w-4 h-4 text-sky-500" />
-            Scheduled Headcount Per Shift × Per Day (Mon → Sun Coverage Mix)
+            <span>Scheduled Headcount Per Shift × Per Day (Mon → Sun Coverage Mix)</span>
+            <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300">
+              Click any Mon–Sun cell to pin exact daily heads
+            </span>
           </div>
-          <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-            Chronologically Sorted · {scheduleResult.shiftDailyMix.length} Shifts · {summary.activeSchedulableCount} Active Pool
-          </span>
+          <div className="flex items-center gap-2.5">
+            {hasAnyDailyPins && (
+              <button
+                type="button"
+                onClick={() => setRules((r) => ({ ...r, shiftDayHeadcountOverrides: {} }))}
+                className="cnx-pill-interactive rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
+              >
+                Reset Daily Pins
+              </button>
+            )}
+            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+              Chronologically Sorted · {scheduleResult.shiftDailyMix.length} Shifts · {summary.activeSchedulableCount} Active Pool
+            </span>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -1938,7 +2159,7 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                 <th className="px-3 py-2 text-right">Weekly Pool</th>
                 <th className="px-3 py-2 text-right">Avg / Day</th>
                 {WEEK_DAYS.map((d) => (
-                  <th key={d} className="px-3 py-2 text-right">
+                  <th key={d} className="px-2 py-2 text-center">
                     {d}
                   </th>
                 ))}
@@ -1983,17 +2204,62 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                   <td className="px-3 py-2 text-right text-slate-500 dark:text-slate-400">
                     {row.avgPerDay.toFixed(1)}
                   </td>
-                  {WEEK_DAYS.map((d) => (
-                    <td key={d} className="px-3 py-2 text-right">
-                      {row.byDay[d] > 0 ? (
-                        <span className="font-bold text-slate-800 dark:text-slate-100">
-                          {row.byDay[d]}
-                        </span>
-                      ) : (
-                        <span className="text-slate-300 dark:text-slate-700">0</span>
-                      )}
-                    </td>
-                  ))}
+                  {WEEK_DAYS.map((d) => {
+                    const rawDayPin = rules.shiftDayHeadcountOverrides?.[row.shiftId]?.[d];
+                    const hasPin = rawDayPin !== undefined && rawDayPin !== null && Number.isFinite(rawDayPin);
+                    const actualVal = row.byDay[d];
+
+                    return (
+                      <td key={d} className="px-1.5 py-1.5 text-center">
+                        <div className="flex flex-col items-center">
+                          <input
+                            type="number"
+                            min={0}
+                            max={500}
+                            step={1}
+                            value={hasPin ? String(rawDayPin) : ''}
+                            placeholder={String(actualVal)}
+                            aria-label={`${row.shiftLabel} ${d} daily scheduled headcount`}
+                            onChange={(e) => {
+                              const raw = e.target.value.trim();
+                              setRules((r) => {
+                                const prevAll = { ...(r.shiftDayHeadcountOverrides ?? {}) };
+                                const prevShift = { ...(prevAll[row.shiftId] ?? {}) };
+                                if (raw === '') {
+                                  delete prevShift[d];
+                                } else {
+                                  const parsed = Number(raw);
+                                  if (!Number.isFinite(parsed)) return r;
+                                  prevShift[d] = Math.max(0, Math.min(500, Math.round(parsed)));
+                                }
+                                if (Object.keys(prevShift).length === 0) {
+                                  delete prevAll[row.shiftId];
+                                } else {
+                                  prevAll[row.shiftId] = prevShift;
+                                }
+                                return { ...r, shiftDayHeadcountOverrides: prevAll };
+                              });
+                            }}
+                            className={`w-14 rounded-lg border px-1.5 py-1 text-center text-xs font-mono font-bold transition focus:outline-none focus:border-sky-500 ${
+                              hasPin
+                                ? 'border-amber-500/60 bg-amber-500/12 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/25'
+                                : actualVal > 0
+                                  ? 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-slate-900 dark:text-slate-100 placeholder:text-slate-800 dark:placeholder:text-slate-100 hover:border-sky-400'
+                                  : 'border-slate-200/70 dark:border-slate-800/70 bg-transparent text-slate-400 placeholder:text-slate-300 dark:placeholder:text-slate-700 hover:border-sky-400'
+                            }`}
+                          />
+                          {hasPin && actualVal !== rawDayPin && (
+                            <span
+                              className="mt-0.5 text-[9px] font-bold text-slate-500 dark:text-slate-400"
+                              title="Actual scheduled count after roster constraints"
+                            >
+                              act:{actualVal}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })}
                   <td className="px-3 py-2 text-right font-bold text-slate-900 dark:text-white">
                     {row.totalWeeklyShifts}
                   </td>
@@ -2070,6 +2336,8 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
           </table>
         </div>
       </section>
+        );
+      })()}
 
       {/* =====================================================================
           7. DAILY SUMMARY ROLLUP TABLE

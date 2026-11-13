@@ -320,6 +320,7 @@ export const App: React.FC = () => {
   const [customRosterAgents, setCustomRosterAgents] = useState<ScheduledAgentRow[] | null>(null);
 
   const shiftOverridesKey = JSON.stringify(schedRules.shiftHeadcountOverrides ?? {});
+  const shiftDayOverridesKey = JSON.stringify(schedRules.shiftDayHeadcountOverrides ?? {});
 
   useEffect(() => {
     setCustomRosterAgents(null);
@@ -334,6 +335,7 @@ export const App: React.FC = () => {
     schedRules.maxWeeklyStartDriftHours,
     schedRules.minInterShiftRestHours,
     shiftOverridesKey,
+    shiftDayOverridesKey,
     schedRules.breakRules.firstBreakMin,
     schedRules.breakRules.lunchMin,
     schedRules.breakRules.lastBreakMin,
