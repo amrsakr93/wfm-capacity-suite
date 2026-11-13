@@ -1,0 +1,1748 @@
+import React, { useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  CalendarClock,
+  CheckCircle2,
+  ClipboardPaste,
+  Download,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
+  Layers,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Trash2,
+  Upload,
+  Users,
+  X,
+} from 'lucide-react';
+import type {
+  AgentDayAssignment,
+  DayKey,
+  ErlangConfig,
+  ExceptionCode,
+  ForecastDayItem,
+  LeaveAllocationCode,
+  LeaveCounts,
+  RosterAgentInput,
+  RosterInputMode,
+  ScheduleGenerationResult,
+  ScheduledAgentRow,
+  SchedulingRules,
+  ShiftTemplate,
+} from '../engine/types.ts';
+import {
+  EXCEPTION_META,
+  WEEK_DAYS,
+  assignOptimalBreaksForShift,
+  buildBreakAssignment,
+  computeCircularStartSpanHours,
+  formatMinutesHHMM,
+  parseAgentRosterFile,
+  parseAgentRosterText,
+  parseShiftCatalogFile,
+  parseShiftCatalogText,
+  validateAgentScheduleRow,
+} from '../engine/scheduling.ts';
+import {
+  BreakStaggerIcon,
+  ConstraintShieldIcon,
+  ProMaxIconBadge,
+  RosterPoolIcon,
+  ShiftSchedulerIcon,
+} from './ProMaxIcons.tsx';
+import { InteractiveRosterCoverageChart } from './InteractiveCharts.tsx';
+import { SmartNumberInput } from './SmartNumberInput.tsx';
+
+interface Tab4SchedulingProps {
+  inputMode: RosterInputMode;
+  setInputMode: React.Dispatch<React.SetStateAction<RosterInputMode>>;
+  headcountInput: number;
+  setHeadcountInput: React.Dispatch<React.SetStateAction<number>>;
+  namedAgents: RosterAgentInput[];
+  setNamedAgents: React.Dispatch<React.SetStateAction<RosterAgentInput[]>>;
+  leaveCounts: LeaveCounts;
+  setLeaveCounts: React.Dispatch<React.SetStateAction<LeaveCounts>>;
+  shiftCatalog: ShiftTemplate[];
+  setShiftCatalog: React.Dispatch<React.SetStateAction<ShiftTemplate[]>>;
+  rules: SchedulingRules;
+  setRules: React.Dispatch<React.SetStateAction<SchedulingRules>>;
+  scheduleResult: ScheduleGenerationResult;
+  onAutoGenerate: () => void;
+  onUpdateRosterAgents: (nextAgents: ScheduledAgentRow[]) => void;
+  onExportScheduleExcel: () => void;
+  nextWeekDays: ForecastDayItem[];
+  capPlanFteTarget: number;
+  erlangConfig: ErlangConfig;
+  grossShiftHoursCapPlan: number;
+  onShowNotice: (msg: string) => void;
+}
+
+const EXCEPTION_KEYS: { key: keyof LeaveCounts; code: ExceptionCode; label: string; hint: string }[] = [
+  { key: 'annual', code: 'AL', label: 'Annual Leave (AL)', hint: 'Input excluded from output' },
+  { key: 'maternity', code: 'MAT', label: 'Maternity', hint: 'Full-week MAT lock' },
+  { key: 'resignations', code: 'RES', label: 'Resignations', hint: 'Full-week RES lock' },
+  { key: 'termination', code: 'TERM', label: 'Termination', hint: 'Full-week TERM lock' },
+  { key: 'upl', code: 'UPL', label: 'Unpaid (UPL)', hint: 'Full-week UPL lock' },
+  { key: 'paternity', code: 'PAT', label: 'Paternity', hint: 'Full-week PAT lock' },
+];
+
+const EXCEPTION_BADGE_STYLES: Record<ExceptionCode, string> = {
+  AL: 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/35',
+  MAT: 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/35',
+  RES: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/35',
+  TERM: 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/35',
+  UPL: 'bg-slate-500/15 text-slate-700 dark:text-slate-300 border-slate-500/35',
+  PAT: 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border-teal-500/35',
+};
+
+type MatrixFilter = 'all' | 'active' | 'leaves' | 'alerts' | 'manual';
+
+export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
+  inputMode,
+  setInputMode,
+  headcountInput,
+  setHeadcountInput,
+  namedAgents,
+  setNamedAgents,
+  leaveCounts,
+  setLeaveCounts,
+  shiftCatalog,
+  setShiftCatalog,
+  rules,
+  setRules,
+  scheduleResult,
+  onAutoGenerate,
+  onUpdateRosterAgents,
+  onExportScheduleExcel,
+  nextWeekDays,
+  capPlanFteTarget,
+  erlangConfig,
+  grossShiftHoursCapPlan,
+  onShowNotice,
+}) => {
+  const rosterFileRef = useRef<HTMLInputElement | null>(null);
+  const shiftFileRef = useRef<HTMLInputElement | null>(null);
+
+  const [showPasteRoster, setShowPasteRoster] = useState(false);
+  const [pasteRosterText, setPasteRosterText] = useState('');
+  const [showPasteShifts, setShowPasteShifts] = useState(false);
+  const [pasteShiftsText, setPasteShiftsText] = useState('');
+  const [quickShiftText, setQuickShiftText] = useState('');
+  const [showBreakTuning, setShowBreakTuning] = useState(false);
+
+  const [selectedDay, setSelectedDay] = useState<DayKey>('Mon');
+  const [chartViewMode, setChartViewMode] = useState<'intraday' | 'weekly'>('intraday');
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [matrixFilter, setMatrixFilter] = useState<MatrixFilter>('all');
+  const [showBreakDetails, setShowBreakDetails] = useState(true);
+  const [editingNameAgentId, setEditingNameAgentId] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState('');
+
+  // Active inline popover editor for any Agent × Day cell
+  const [editingCell, setEditingCell] = useState<{ agentId: string; dayKey: DayKey } | null>(null);
+
+  const shiftMap = useMemo(() => new Map(shiftCatalog.map((s) => [s.id, s])), [shiftCatalog]);
+  const enabledShifts = useMemo(() => shiftCatalog.filter((s) => s.enabled), [shiftCatalog]);
+
+  const totalRosterPool = inputMode === 'named' && namedAgents.length > 0 ? namedAgents.length : headcountInput;
+  const totalExclusionsRequested =
+    leaveCounts.annual +
+    leaveCounts.maternity +
+    leaveCounts.resignations +
+    leaveCounts.termination +
+    leaveCounts.upl +
+    leaveCounts.paternity;
+  const schedulableTarget = Math.max(0, totalRosterPool - totalExclusionsRequested);
+
+  const handleUploadRosterFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = await parseAgentRosterFile(file);
+      if (parsed.length === 0) {
+        onShowNotice('Could not detect agent names in uploaded file.');
+        return;
+      }
+      setNamedAgents(parsed);
+      setInputMode('named');
+      onShowNotice(`Imported ${parsed.length} agent names from ${file.name}. Click Auto-Optimize to refresh schedule.`);
+    } catch (err) {
+      onShowNotice(`Roster parse error: ${(err as Error).message}`);
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleApplyPastedRoster = () => {
+    const parsed = parseAgentRosterText(pasteRosterText);
+    if (parsed.length === 0) {
+      onShowNotice('No agent names detected. Paste one name per line (optional ", MAT/AL/UPL").');
+      return;
+    }
+    setNamedAgents(parsed);
+    setInputMode('named');
+    setShowPasteRoster(false);
+    setPasteRosterText('');
+    onShowNotice(`Loaded ${parsed.length} agents into Named Roster mode.`);
+  };
+
+  const handleUploadShiftsFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = await parseShiftCatalogFile(file, Math.round(grossShiftHoursCapPlan * 60));
+      if (parsed.length === 0) {
+        onShowNotice('No valid shift times found in file (expected e.g. 09:00-18:00).');
+        return;
+      }
+      setShiftCatalog(parsed);
+      onShowNotice(`Imported ${parsed.length} external shift definitions from ${file.name}.`);
+    } catch (err) {
+      onShowNotice(`Shift import error: ${(err as Error).message}`);
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleApplyPastedShifts = (replaceExisting: boolean) => {
+    const parsed = parseShiftCatalogText(pasteShiftsText, Math.round(grossShiftHoursCapPlan * 60));
+    if (parsed.length === 0) {
+      onShowNotice('No shifts parsed. Example: 08:00-17:00 or 9:00 AM - 6:00 PM.');
+      return;
+    }
+    if (replaceExisting) {
+      setShiftCatalog(parsed);
+    } else {
+      setShiftCatalog((prev) => {
+        const seen = new Set(prev.map((s) => s.id));
+        return [...prev, ...parsed.filter((s) => !seen.has(s.id))];
+      });
+    }
+    setShowPasteShifts(false);
+    setPasteShiftsText('');
+    onShowNotice(`${replaceExisting ? 'Loaded' : 'Added'} ${parsed.length} external shifts cleanly.`);
+  };
+
+  const handleAddQuickShift = () => {
+    const parsed = parseShiftCatalogText(quickShiftText, Math.round(grossShiftHoursCapPlan * 60));
+    if (parsed.length === 0) {
+      onShowNotice('Enter format like 07:00-16:00 or 22:00-07:00.');
+      return;
+    }
+    setShiftCatalog((prev) => {
+      const seen = new Set(prev.map((s) => s.id));
+      const added = parsed.filter((s) => !seen.has(s.id));
+      return added.length > 0 ? [...prev, ...added] : prev;
+    });
+    setQuickShiftText('');
+  };
+
+  // Filtered roster table rows
+  const filteredRows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return scheduleResult.visibleOutputAgents.filter((agent) => {
+      if (q && !agent.agentName.toLowerCase().includes(q) && !agent.offPatternLabel.toLowerCase().includes(q)) {
+        return false;
+      }
+      if (matrixFilter === 'active') return agent.preAllocatedException === null;
+      if (matrixFilter === 'leaves') return agent.preAllocatedException !== null;
+      if (matrixFilter === 'alerts') return agent.violations.length > 0;
+      if (matrixFilter === 'manual') {
+        return WEEK_DAYS.some((dk) => agent.assignments[dk]?.isManualOverride);
+      }
+      return true;
+    });
+  }, [scheduleResult.visibleOutputAgents, searchQuery, matrixFilter]);
+
+  const { summary, dailyTotals, coverageByDay } = scheduleResult;
+
+  // Helpers for inline Cell Popover
+  const editingTarget = useMemo(() => {
+    if (!editingCell) return null;
+    const agent = scheduleResult.agents.find((a) => a.agentId === editingCell.agentId);
+    if (!agent) return null;
+    const assign = agent.assignments[editingCell.dayKey];
+    return { agent, assign, dayKey: editingCell.dayKey };
+  }, [editingCell, scheduleResult.agents]);
+
+  const applyCellAssignment = (
+    agentId: string,
+    dayKey: DayKey,
+    nextAssign: Partial<AgentDayAssignment>,
+    applyFullWeek = false
+  ) => {
+    const updated = scheduleResult.agents.map((a) => {
+      if (a.agentId !== agentId) return a;
+      const nextAssignments = { ...a.assignments };
+      if (applyFullWeek && nextAssign.status && nextAssign.status !== 'WORK') {
+        for (const dk of WEEK_DAYS) {
+          nextAssignments[dk] = {
+            dayKey: dk,
+            status: nextAssign.status,
+            shiftId: null,
+            breaks: null,
+            isManualOverride: true,
+          };
+        }
+        return {
+          ...a,
+          preAllocatedException: nextAssign.status === 'OFF' ? null : nextAssign.status,
+          assignments: nextAssignments,
+        };
+      }
+
+      const prevCell = a.assignments[dayKey];
+      const merged: AgentDayAssignment = {
+        ...prevCell,
+        ...nextAssign,
+        dayKey,
+        isManualOverride: true,
+      };
+      if (merged.status !== 'WORK') {
+        merged.shiftId = null;
+        merged.breaks = null;
+      } else if (merged.shiftId && !merged.breaks) {
+        const sh = shiftMap.get(merged.shiftId);
+        if (sh) {
+          const surplus15 = new Array<number>(96).fill(2);
+          merged.breaks = assignOptimalBreaksForShift(sh, surplus15, rules.breakRules);
+        }
+      }
+      nextAssignments[dayKey] = merged;
+      const allEx = WEEK_DAYS.every((dk) => nextAssignments[dk].status !== 'WORK' && nextAssignments[dk].status !== 'OFF');
+      return {
+        ...a,
+        preAllocatedException: allEx ? (merged.status as ExceptionCode) : null,
+        assignments: nextAssignments,
+      };
+    });
+    onUpdateRosterAgents(updated);
+  };
+
+  // Pre-flight rule check for shift dropdown in Popover
+  const previewShiftCompatibility = (agent: ScheduledAgentRow, dayKey: DayKey, cand: ShiftTemplate) => {
+    const tempRow: ScheduledAgentRow = {
+      ...agent,
+      assignments: {
+        ...agent.assignments,
+        [dayKey]: {
+          dayKey,
+          status: 'WORK',
+          shiftId: cand.id,
+          breaks: null,
+        },
+      },
+    };
+    const starts: number[] = [];
+    for (const dk of WEEK_DAYS) {
+      const a = tempRow.assignments[dk];
+      if (a.status === 'WORK' && a.shiftId) {
+        const s = shiftMap.get(a.shiftId);
+        if (s) starts.push(s.startMin);
+      }
+    }
+    const span = computeCircularStartSpanHours(starts);
+    const audited = validateAgentScheduleRow(tempRow, shiftCatalog, rules);
+    const hasRestAlert = audited.violations.some((v) => v.includes('rest') || v.includes('clopening'));
+    const hasDriftAlert = span > rules.maxWeeklyStartDriftHours + 1e-6;
+    return {
+      ok: !hasRestAlert && !hasDriftAlert,
+      span,
+      reason: hasRestAlert ? '<Min Rest' : hasDriftAlert ? `Drift ${span}h` : 'Compatible',
+    };
+  };
+
+  const commitInlineName = (agentId: string) => {
+    const clean = editingNameValue.trim();
+    if (clean) {
+      onUpdateRosterAgents(
+        scheduleResult.agents.map((a) => (a.agentId === agentId ? { ...a, agentName: clean } : a))
+      );
+    }
+    setEditingNameAgentId(null);
+  };
+
+  // Percentage bar calculations for roster pool visual
+  const safeDenominator = Math.max(1, summary.totalRosterInput);
+  const pctActive = (summary.activeSchedulableCount / safeDenominator) * 100;
+  const pctLeave = (summary.fullWeekExceptionsCount / safeDenominator) * 100;
+  const pctAnnual = (summary.annualExcluded / safeDenominator) * 100;
+
+  return (
+    <div className="space-y-6 animate-slide-up">
+      {/* =====================================================================
+          1. COMMAND CONTROL DECK: ROSTER/LEAVES INPUT + EXTERNAL SHIFTS/RULES
+         ===================================================================== */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        {/* LEFT PANEL: AGENT POOL & LEAVE INPUT DEDUCTIONS */}
+        <section className="no-print bento-card-promax xl:col-span-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <ProMaxIconBadge tone="cyan" size="md" pulse>
+                <RosterPoolIcon size={22} />
+              </ProMaxIconBadge>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  Roster Pool &amp; Leave Exclusions (Input)
+                  <span className="inline-flex items-center rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-300 px-2 py-0.5 text-[10px] font-semibold">
+                    {schedulableTarget} Schedulable
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Upload names or enter total headcount (Agent 1..N). Annual &amp; leave pools deduct cleanly before shift generation.
+                </p>
+              </div>
+            </div>
+
+            {/* Dual Input Mode Switcher */}
+            <div className="flex items-center gap-1 rounded-xl bg-slate-100 dark:bg-slate-950/70 p-1 border border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setInputMode('headcount')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  inputMode === 'headcount'
+                    ? 'bg-[#0088c2] text-white shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Headcount Input
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode('named')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  inputMode === 'named'
+                    ? 'bg-[#0088c2] text-white shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                Upload Names ({namedAgents.length})
+              </button>
+            </div>
+          </div>
+
+          {/* Mode Controls: Headcount vs Uploaded Roster */}
+          {inputMode === 'headcount' ? (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-3.5 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase font-bold tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Total Team Headcount
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <SmartNumberInput
+                      value={headcountInput}
+                      min={1}
+                      max={500}
+                      onChange={(v) => setHeadcountInput(Math.max(1, Math.min(500, Math.round(v))))}
+                      className="w-24 rounded-lg border border-sky-500/40 bg-white dark:bg-slate-900 px-3 py-1.5 text-sm font-extrabold font-mono text-sky-700 dark:text-sky-300"
+                    />
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      auto-named Agent 1 … Agent {headcountInput}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHeadcountInput(Math.max(1, Math.round(capPlanFteTarget)))}
+                className="cnx-pill-interactive inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300 cursor-pointer"
+              >
+                <Users className="w-3.5 h-3.5" />
+                Sync Tab 3 Cap Plan ({Math.round(capPlanFteTarget)} FTE)
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-3.5 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-slate-600 dark:text-slate-300">
+                  {namedAgents.length > 0 ? (
+                    <span>
+                      <strong className="text-sky-600 dark:text-sky-400">{namedAgents.length} agents</strong> loaded (count extracted automatically)
+                    </span>
+                  ) : (
+                    <span>No names uploaded yet — upload Excel/CSV or paste list below.</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={rosterFileRef}
+                    type="file"
+                    accept=".csv,.txt,.xlsx,.xls"
+                    onChange={handleUploadRosterFile}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => rosterFileRef.current?.click()}
+                    className="cnx-pill-interactive inline-flex items-center gap-1.5 rounded-lg bg-[#0088c2] hover:bg-[#0073a8] text-white px-2.5 py-1.5 text-xs font-bold cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    Upload Names (.xlsx/.csv)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPasteRoster((s) => !s)}
+                    className="cnx-pill-interactive inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-semibold cursor-pointer"
+                  >
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    Paste List
+                  </button>
+                </div>
+              </div>
+
+              {showPasteRoster && (
+                <div className="space-y-2 pt-1">
+                  <textarea
+                    rows={4}
+                    value={pasteRosterText}
+                    onChange={(e) => setPasteRosterText(e.target.value)}
+                    placeholder={`Agent Name, Status (Optional)\nAhmed Hassan\nSara Adel, MAT\nOmar Tarek, AL\nHeba Youssef, UPL`}
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 p-2.5 text-xs font-mono focus:outline-none focus:border-sky-500"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowPasteRoster(false)}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleApplyPastedRoster}
+                      className="rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 text-xs font-bold cursor-pointer"
+                    >
+                      Load Agent Names
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 6-Tile Full-Week Exception & AL Input Deductions */}
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Leave &amp; Attrition Inputs (0% Shift Coverage · Locked Full Week)
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setRules((r) => ({
+                    ...r,
+                    annualVisibilityInOutput:
+                      r.annualVisibilityInOutput === 'exclude' ? 'show_muted' : 'exclude',
+                  }))
+                }
+                className={`cnx-pill-interactive inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold cursor-pointer ${
+                  rules.annualVisibilityInOutput === 'exclude'
+                    ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                    : 'border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                {rules.annualVisibilityInOutput === 'exclude' ? (
+                  <>
+                    <EyeOff className="w-3 h-3" />
+                    AL: Excluded from Output
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3 h-3" />
+                    AL: Shown Muted in Output
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              {EXCEPTION_KEYS.map((item) => (
+                <div
+                  key={item.code}
+                  className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/60 p-2.5"
+                >
+                  <div className="flex items-center justify-between gap-1 mb-1">
+                    <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                      {item.label}
+                    </span>
+                    <span
+                      className={`rounded-md border px-1.5 py-0.5 text-[9px] font-mono font-bold ${EXCEPTION_BADGE_STYLES[item.code]}`}
+                    >
+                      {item.code}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <SmartNumberInput
+                      value={leaveCounts[item.key]}
+                      min={0}
+                      max={totalRosterPool}
+                      onChange={(v) =>
+                        setLeaveCounts((prev) => ({
+                          ...prev,
+                          [item.key]: Math.max(0, Math.min(totalRosterPool, Math.round(v))),
+                        }))
+                      }
+                      className="w-16 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs font-mono font-bold"
+                    />
+                    <span className="text-[10px] text-slate-400 truncate">{item.hint}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Live Proportional Pool Allocation Bar */}
+          <div className="space-y-1.5 pt-1">
+            <div className="h-2.5 w-full rounded-full overflow-hidden bg-slate-200 dark:bg-slate-800 flex">
+              <div
+                style={{ width: `${pctActive}%` }}
+                className="bg-gradient-to-r from-[#0088c2] to-[#14b8a6] transition-all duration-300"
+                title={`Active Schedulable: ${summary.activeSchedulableCount}`}
+              />
+              <div
+                style={{ width: `${pctLeave}%` }}
+                className="bg-amber-500/85 transition-all duration-300"
+                title={`Full-Week Exceptions (MAT/RES/TERM/UPL/PAT): ${summary.fullWeekExceptionsCount}`}
+              />
+              <div
+                style={{ width: `${pctAnnual}%` }}
+                className="bg-slate-400/70 transition-all duration-300"
+                title={`Annual Leave Input Excluded: ${summary.annualExcluded}`}
+              />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+              <span>
+                <strong className="text-emerald-600 dark:text-emerald-400">{summary.activeSchedulableCount}</strong> Active Shifts Pool ·{' '}
+                <strong className="text-amber-600 dark:text-amber-400">{summary.fullWeekExceptionsCount}</strong> Week Leaves ·{' '}
+                <strong className="text-sky-600 dark:text-sky-400">{summary.annualExcluded}</strong> AL Input
+              </span>
+              {totalExclusionsRequested > totalRosterPool && (
+                <span className="text-rose-500 font-bold">
+                  ⚠ Exclusions exceed total headcount!
+                </span>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* RIGHT PANEL: EXTERNAL SHIFT CATALOG & HARD CONSTRAINTS */}
+        <section className="no-print bento-card-promax xl:col-span-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <ProMaxIconBadge tone="emerald" size="md">
+                <BreakStaggerIcon size={22} />
+              </ProMaxIconBadge>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  External Shift Catalog &amp; WFM Constraints
+                  <span className="inline-flex items-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 text-[10px] font-semibold">
+                    {enabledShifts.length} Active Shifts
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Import shifts from outside; optimizer fits shifts to Next Week Arrival Curves &amp; Erlang Required seats.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <input
+                ref={shiftFileRef}
+                type="file"
+                accept=".csv,.txt,.xlsx,.xls"
+                onChange={handleUploadShiftsFile}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => shiftFileRef.current?.click()}
+                className="cnx-pill-interactive inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-xs font-semibold cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5 text-sky-500" />
+                Upload Shifts
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPasteShifts((s) => !s)}
+                className="cnx-pill-interactive inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-xs font-semibold cursor-pointer"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5 text-teal-500" />
+                Paste Shifts
+              </button>
+            </div>
+          </div>
+
+          {showPasteShifts && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3 space-y-2">
+              <textarea
+                rows={3}
+                value={pasteShiftsText}
+                onChange={(e) => setPasteShiftsText(e.target.value)}
+                placeholder={`08:00-17:00\n09:00-18:00\n10:00-19:00\n12:00-21:00\n15:00-00:00\n22:00-07:00`}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 p-2 text-xs font-mono"
+              />
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPasteShifts(false)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyPastedShifts(false)}
+                  className="rounded-lg bg-sky-600 hover:bg-sky-500 text-white px-2.5 py-1 text-xs font-bold cursor-pointer"
+                >
+                  Append
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyPastedShifts(true)}
+                  className="rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 text-xs font-bold cursor-pointer"
+                >
+                  Replace Catalog
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Shift Chips Catalog + Quick Add */}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {shiftCatalog.map((shift) => (
+                <div
+                  key={shift.id}
+                  className={`cnx-pill-interactive group inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-mono font-bold transition ${
+                    shift.enabled
+                      ? 'border-sky-500/45 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                      : 'border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-950/40 text-slate-400 line-through'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShiftCatalog((prev) =>
+                        prev.map((s) => (s.id === shift.id ? { ...s, enabled: !s.enabled } : s))
+                      )
+                    }
+                    className="cursor-pointer flex items-center gap-1"
+                    title="Click to enable/disable this shift in optimization"
+                  >
+                    <CalendarClock className="w-3.5 h-3.5" />
+                    <span>{shift.label}</span>
+                    <span className="text-[10px] opacity-75">({(shift.durationMin / 60).toFixed(0)}h)</span>
+                  </button>
+                  {shiftCatalog.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setShiftCatalog((prev) => prev.filter((s) => s.id !== shift.id))
+                      }
+                      aria-label={`Remove shift ${shift.label}`}
+                      className="ml-0.5 text-slate-400 hover:text-rose-500 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={quickShiftText}
+                onChange={(e) => setQuickShiftText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddQuickShift()}
+                placeholder="Add shift e.g. 07:00-16:00 or 22:00-07:00"
+                className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 px-3 py-1.5 text-xs font-mono focus:outline-none focus:border-sky-500"
+              />
+              <button
+                type="button"
+                onClick={handleAddQuickShift}
+                className="cnx-pill-interactive inline-flex items-center gap-1 rounded-xl bg-slate-800 dark:bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 text-xs font-bold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add
+              </button>
+            </div>
+          </div>
+
+          {/* Hard WFM Constraints Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Workdays &amp; 2 OFF Rule
+              </div>
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span>Max Work: ≤{rules.maxWorkdaysPerWeek}d</span>
+                <span className="text-emerald-600 dark:text-emerald-400">2 OFFs</span>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setRules((r) => ({ ...r, allowSunMonSplitOff: !r.allowSunMonSplitOff }))
+                }
+                className={`w-full rounded-lg border px-2 py-1 text-[11px] font-bold transition cursor-pointer ${
+                  rules.allowSunMonSplitOff
+                    ? 'border-emerald-500/45 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                    : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-500'
+                }`}
+              >
+                {rules.allowSunMonSplitOff
+                  ? '✓ Sun+Mon Split OFF Allowed'
+                  : 'Adjacent OFFs Only (Mon–Sun)'}
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Fair Weekly Shift Band
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {[0, 1, 2, 3].map((h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    onClick={() => setRules((r) => ({ ...r, maxWeeklyStartDriftHours: h }))}
+                    className={`rounded-lg py-1 text-[11px] font-mono font-bold border transition cursor-pointer ${
+                      rules.maxWeeklyStartDriftHours === h
+                        ? 'bg-[#0088c2] border-[#0088c2] text-white'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {h === 0 ? 'Fix' : `±${h}h`}
+                  </button>
+                ))}
+              </div>
+              <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                Blocks morning↔afternoon jumps
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-2.5 space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Min Inter-Shift Rest
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {[10, 11, 12, 14].map((h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    onClick={() => setRules((r) => ({ ...r, minInterShiftRestHours: h }))}
+                    className={`rounded-lg py-1 text-[11px] font-mono font-bold border transition cursor-pointer ${
+                      rules.minInterShiftRestHours === h
+                        ? 'bg-emerald-600 border-emerald-600 text-white'
+                        : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {h}h
+                  </button>
+                ))}
+              </div>
+              <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                No Clopening / Night→AM flips
+              </div>
+            </div>
+          </div>
+
+          {/* Break Constraints Pill + Expandable Config + Main Generate CTA */}
+          <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 dark:bg-sky-950/25 p-3 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-bold text-sky-700 dark:text-sky-300">
+                  Auto Breaks: {rules.breakRules.firstBreakMin}m + {rules.breakRules.lunchMin}m Lunch + {rules.breakRules.lastBreakMin}m
+                </span>
+                <span className="rounded-md bg-white/80 dark:bg-slate-900 px-2 py-0.5 text-[11px] font-mono border border-slate-200 dark:border-slate-700">
+                  Streak ≤ {(rules.breakRules.maxContinuousLoginMin / 60).toFixed(1)}h · Gap ≥ {rules.breakRules.minGapBetweenBreaksMin}m
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBreakTuning((s) => !s)}
+                className="text-[11px] font-semibold text-sky-600 dark:text-sky-400 hover:underline cursor-pointer"
+              >
+                {showBreakTuning ? 'Hide Break Tuning' : 'Tune Break Rules'}
+              </button>
+            </div>
+
+            {showBreakTuning && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]">
+                <div>
+                  <label className="block text-slate-500 mb-0.5">First Break (m)</label>
+                  <SmartNumberInput
+                    value={rules.breakRules.firstBreakMin}
+                    min={15}
+                    max={30}
+                    step={15}
+                    onChange={(v) =>
+                      setRules((r) => ({ ...r, breakRules: { ...r.breakRules, firstBreakMin: v } }))
+                    }
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-500 mb-0.5">Lunch (m)</label>
+                  <SmartNumberInput
+                    value={rules.breakRules.lunchMin}
+                    min={30}
+                    max={60}
+                    step={15}
+                    onChange={(v) =>
+                      setRules((r) => ({ ...r, breakRules: { ...r.breakRules, lunchMin: v } }))
+                    }
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-500 mb-0.5">Max Streak (m)</label>
+                  <SmartNumberInput
+                    value={rules.breakRules.maxContinuousLoginMin}
+                    min={120}
+                    max={300}
+                    step={15}
+                    onChange={(v) =>
+                      setRules((r) => ({
+                        ...r,
+                        breakRules: { ...r.breakRules, maxContinuousLoginMin: v },
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-500 mb-0.5">Min Gap (m)</label>
+                  <SmartNumberInput
+                    value={rules.breakRules.minGapBetweenBreaksMin}
+                    min={30}
+                    max={120}
+                    step={15}
+                    onChange={(v) =>
+                      setRules((r) => ({
+                        ...r,
+                        breakRules: { ...r.breakRules, minGapBetweenBreaksMin: v },
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onAutoGenerate}
+              className="cnx-pill-interactive flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#0088c2] to-[#14b8a6] hover:brightness-110 text-white px-4 py-2.5 text-xs font-extrabold shadow-md cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4" />
+              Auto-Optimize Weekly Roster &amp; 15m Breaks
+            </button>
+            <button
+              type="button"
+              onClick={onExportScheduleExcel}
+              className="cnx-pill-interactive inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2.5 text-xs font-bold shadow-sm cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              Export Schedule .xlsx
+            </button>
+          </div>
+        </section>
+      </div>
+
+      {/* =====================================================================
+          2. 5 EXECUTIVE SCHEDULE KPI CARDS
+         ===================================================================== */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-xs">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Total Roster Input
+          </div>
+          <div className="text-2xl font-black font-mono tabular-nums text-slate-900 dark:text-white mt-1">
+            {summary.totalRosterInput}
+            <span className="text-xs font-semibold text-slate-400 ml-1.5">Agents</span>
+          </div>
+          <div className="text-[11px] text-sky-600 dark:text-sky-400 font-medium mt-1">
+            AL Input Excluded: {summary.annualExcluded} · Leaves: {summary.fullWeekExceptionsCount}
+          </div>
+        </div>
+
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-xs">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Active Working Pool
+          </div>
+          <div className="text-2xl font-black font-mono tabular-nums text-sky-600 dark:text-sky-400 mt-1">
+            {summary.activeSchedulableCount}
+            <span className="text-xs font-semibold text-slate-400 ml-1.5">
+              ({summary.totalWorkShifts} shifts/wk)
+            </span>
+          </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+            Net Paid Hrs: {summary.totalScheduledNetHours.toFixed(0)}h vs {summary.totalRequiredProdHours.toFixed(0)}h req
+          </div>
+        </div>
+
+        <div className="card-elevated kpi-hero-accent rounded-xl border-2 border-sky-500/40 bg-sky-500/5 dark:bg-sky-950/30 p-4 shadow-xs">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+            Net Interval Coverage %
+          </div>
+          <div className="text-2xl font-black font-mono tabular-nums text-sky-700 dark:text-sky-300 mt-1">
+            {summary.avgCoveragePct.toFixed(1)}%
+          </div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-1">
+            True coverage after 15/30/15 breaks
+          </div>
+        </div>
+
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-xs">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Projected Weekly SL %
+          </div>
+          <div
+            className={`text-2xl font-black font-mono tabular-nums mt-1 ${
+              summary.projectedWeeklySlPct >= erlangConfig.slTargetPct
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-amber-600 dark:text-amber-400'
+            }`}
+          >
+            {summary.projectedWeeklySlPct.toFixed(1)}%
+            <span className="text-xs font-semibold text-slate-400 ml-1.5">
+              / {erlangConfig.slTargetPct}%
+            </span>
+          </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+            {summary.understaffedIntervalsTotal} tight/deficit intervals across 7d
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setMatrixFilter((f) => (f === 'alerts' ? 'all' : 'alerts'))}
+          className={`text-left card-elevated kpi-hero-accent rounded-xl border-2 p-4 shadow-xs cursor-pointer ${
+            summary.violationAgentsCount === 0
+              ? 'border-emerald-500/40 bg-emerald-500/10 dark:bg-emerald-950/30'
+              : 'border-amber-500/45 bg-amber-500/10 dark:bg-amber-950/30'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+              Policy &amp; Break Audit
+            </span>
+            <ConstraintShieldIcon ok={summary.violationAgentsCount === 0} size={20} />
+          </div>
+          <div
+            className={`text-xl font-black font-mono mt-1 ${
+              summary.violationAgentsCount === 0
+                ? 'text-emerald-700 dark:text-emerald-300'
+                : 'text-amber-600 dark:text-amber-300'
+            }`}
+          >
+            {summary.violationAgentsCount === 0
+              ? '100% Compliant'
+              : `${summary.violationAgentsCount} Rule Alerts`}
+          </div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-1">
+            Valid Breaks: {summary.validBreakRatePct.toFixed(1)}% · Click to filter
+          </div>
+        </button>
+      </div>
+
+      {/* =====================================================================
+          3. INTERACTIVE MON->SUN FORECAST COVERAGE & BREAK STAGGER CHART
+         ===================================================================== */}
+      <section className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <ProMaxIconBadge tone="blue" size="md">
+              <ShiftSchedulerIcon size={22} />
+            </ProMaxIconBadge>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                Scheduled Coverage vs Next Week Forecast &amp; Arrival Pattern (Mon → Sun)
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Click any weekday card below to inspect 15/30/60-min interval coverage and live break staggering.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 rounded-xl bg-slate-100 dark:bg-slate-950/70 p-1 border border-slate-200 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => setChartViewMode('intraday')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                chartViewMode === 'intraday'
+                  ? 'bg-[#0088c2] text-white'
+                  : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              Intraday Curve ({selectedDay})
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartViewMode('weekly')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                chartViewMode === 'weekly'
+                  ? 'bg-[#0088c2] text-white'
+                  : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              7-Day Weekly Rollup
+            </button>
+          </div>
+        </div>
+
+        {/* 7 Clickable Mon-Sun Cards Synced with Next Week Forecast */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+          {dailyTotals.map((d) => {
+            const isSelected = selectedDay === d.dayKey;
+            const fcstDay = nextWeekDays.find((f) => f.dayKey === d.dayKey);
+            return (
+              <button
+                key={d.dayKey}
+                type="button"
+                onClick={() => {
+                  setSelectedDay(d.dayKey);
+                  setChartViewMode('intraday');
+                }}
+                className={`cnx-pill-interactive text-left rounded-xl border p-2.5 cursor-pointer ${
+                  isSelected
+                    ? 'border-[#00A3E0] bg-sky-500/12 dark:bg-sky-950/45 ring-1 ring-[#00A3E0]/50'
+                    : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50'
+                }`}
+              >
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className="text-slate-900 dark:text-white">{d.dayKey}</span>
+                  <span
+                    className={`rounded-md px-1.5 py-0.5 text-[10px] font-mono font-bold ${
+                      d.coveragePct >= 95
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                        : d.coveragePct >= 85
+                          ? 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                          : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                    }`}
+                  >
+                    {d.coveragePct.toFixed(0)}%
+                  </span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                  {(fcstDay?.dateIso ?? d.dateIso).slice(5)} · {d.forecastVolume.toLocaleString()} calls
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-mono mt-1">
+                  <span className="text-sky-600 dark:text-sky-400">
+                    {d.scheduledNetHours.toFixed(0)}h / {d.requiredProdHours.toFixed(0)}h
+                  </span>
+                  <span
+                    className={
+                      d.understaffedIntervals > 0
+                        ? 'text-amber-600 dark:text-amber-400 font-bold'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }
+                  >
+                    {d.understaffedIntervals > 0 ? `${d.understaffedIntervals} low` : '✓ Covered'}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <InteractiveRosterCoverageChart
+          selectedDay={selectedDay}
+          cells={coverageByDay[selectedDay] ?? []}
+          dailyTotals={dailyTotals}
+          viewMode={chartViewMode}
+        />
+      </section>
+
+      {/* =====================================================================
+          4. INTERACTIVE EDITABLE WEEKLY ROSTER & BREAK MATRIX
+         ===================================================================== */}
+      <section className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Layers className="w-4 h-4 text-sky-500" />
+              Interactive Editable Agent Schedule &amp; Break Matrix ({filteredRows.length} shown)
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Click any agent name to rename, or click any day cell (Mon–Sun) to manually swap shifts, toggle OFF/Leaves, or customize 15m + 30m + 15m breaks.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search agent or OFF pair..."
+                className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 text-xs w-48 focus:outline-none focus:border-sky-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-1 rounded-xl bg-slate-100 dark:bg-slate-950/70 p-1 border border-slate-200 dark:border-slate-800">
+              {(
+                [
+                  { id: 'all', label: 'All' },
+                  { id: 'active', label: 'Active' },
+                  { id: 'leaves', label: 'Leaves' },
+                  { id: 'alerts', label: `Alerts (${summary.violationAgentsCount})` },
+                  { id: 'manual', label: 'Edited' },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setMatrixFilter(f.id)}
+                  className={`px-2 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                    matrixFilter === f.id
+                      ? 'bg-[#0088c2] text-white'
+                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowBreakDetails((v) => !v)}
+              className={`cnx-pill-interactive rounded-xl border px-2.5 py-1.5 text-[11px] font-bold cursor-pointer ${
+                showBreakDetails
+                  ? 'border-teal-500/40 bg-teal-500/10 text-teal-700 dark:text-teal-300'
+                  : 'border-slate-300 dark:border-slate-700 text-slate-500'
+              }`}
+            >
+              {showBreakDetails ? 'Breaks Visible (15/30/15)' : 'Compact Shifts Only'}
+            </button>
+
+            <button
+              type="button"
+              onClick={onAutoGenerate}
+              title="Reset manual edits and re-optimize schedule"
+              className="cnx-pill-interactive inline-flex items-center gap-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Re-Solve
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto max-h-[620px]">
+          <table className="w-full text-xs border-collapse">
+            <thead className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="sticky left-0 z-30 bg-slate-100 dark:bg-slate-950 text-left px-2.5 py-2 font-bold min-w-[108px]">
+                  Agent / ID
+                </th>
+                <th className="text-center px-1.5 py-2 font-bold min-w-[84px]">OFF / Profile</th>
+                {WEEK_DAYS.map((dk) => {
+                  const dt = dailyTotals.find((d) => d.dayKey === dk);
+                  return (
+                    <th key={dk} className="text-center px-1 py-2 font-bold min-w-[102px]">
+                      <div>{dk}</div>
+                      <div className="text-[10px] font-mono font-normal text-slate-400">
+                        {dt?.dateIso.slice(5)} · {dt?.coveragePct.toFixed(0)}%
+                      </div>
+                    </th>
+                  );
+                })}
+                <th className="text-center px-1.5 py-2 font-bold min-w-[78px]">Compliance</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="py-10 text-center text-slate-400">
+                    No agents match this filter. Try switching filter to &quot;All&quot; or increasing headcount.
+                  </td>
+                </tr>
+              ) : (
+                filteredRows.map((agent) => {
+                  const hasAlerts = agent.violations.length > 0;
+                  return (
+                    <tr
+                      key={agent.agentId}
+                      className={`hover:bg-sky-500/5 transition ${
+                        agent.preAllocatedException === 'AL' ? 'opacity-65' : ''
+                      }`}
+                    >
+                      {/* Sticky Agent Name Column (Inline editable) */}
+                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 px-2.5 py-1.5 border-r border-slate-100 dark:border-slate-800/80">
+                        {editingNameAgentId === agent.agentId ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={editingNameValue}
+                            onChange={(e) => setEditingNameValue(e.target.value)}
+                            onBlur={() => commitInlineName(agent.agentId)}
+                            onKeyDown={(e) => e.key === 'Enter' && commitInlineName(agent.agentId)}
+                            className="w-full rounded-md border border-sky-500 bg-white dark:bg-slate-950 px-2 py-1 text-xs font-bold"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingNameAgentId(agent.agentId);
+                              setEditingNameValue(agent.agentName);
+                            }}
+                            className="group flex items-center gap-1 text-left font-bold text-slate-900 dark:text-slate-100 hover:text-sky-600 dark:hover:text-sky-400 cursor-pointer"
+                            title="Click to rename agent"
+                          >
+                            <span className="truncate max-w-[94px]">{agent.agentName}</span>
+                            <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-75 transition shrink-0" />
+                          </button>
+                        )}
+                      </td>
+
+                      {/* OFF Pattern & Drift Summary */}
+                      <td className="px-1.5 py-1.5 text-center">
+                        <span
+                          className={`inline-block rounded-lg border px-1.5 py-0.5 text-[10px] font-bold ${
+                            agent.preAllocatedException
+                              ? EXCEPTION_BADGE_STYLES[agent.preAllocatedException]
+                              : agent.offPatternLabel.includes('Split')
+                                ? 'border-teal-500/35 bg-teal-500/10 text-teal-700 dark:text-teal-300'
+                                : 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          {agent.offPatternLabel || 'Custom'}
+                        </span>
+                        {agent.workDaysCount > 0 && (
+                          <div className="text-[9.5px] font-mono text-slate-400 mt-0.5">
+                            {agent.workDaysCount}d · Δ{agent.shiftBandSpanHours.toFixed(1)}h · R
+                            {agent.minRestHoursObserved !== null
+                              ? `${agent.minRestHoursObserved.toFixed(0)}h`
+                              : '—'}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Interactive Day Cells (Mon .. Sun) */}
+                      {WEEK_DAYS.map((dk) => {
+                        const cell = agent.assignments[dk];
+                        const shift = cell?.shiftId ? shiftMap.get(cell.shiftId) : null;
+                        const isException = cell && cell.status !== 'WORK' && cell.status !== 'OFF';
+
+                        return (
+                          <td key={dk} className="px-1 py-1 text-center align-middle">
+                            <button
+                              type="button"
+                              onClick={() => setEditingCell({ agentId: agent.agentId, dayKey: dk })}
+                              className={`cnx-pill-interactive w-full rounded-xl border px-1.5 py-1.5 text-left transition cursor-pointer ${
+                                cell.status === 'WORK' && shift
+                                  ? 'border-sky-500/30 bg-sky-500/10 hover:border-sky-400 dark:bg-sky-950/40'
+                                  : isException
+                                    ? EXCEPTION_BADGE_STYLES[cell.status as ExceptionCode]
+                                    : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-slate-400 hover:border-slate-400'
+                              } ${cell.isManualOverride ? 'ring-1 ring-amber-400/70' : ''}`}
+                            >
+                              {cell.status === 'WORK' && shift ? (
+                                <div>
+                                  <div className="flex items-center justify-between gap-1 font-mono font-extrabold text-[11px] text-slate-900 dark:text-sky-200">
+                                    <span>{shift.label}</span>
+                                    {cell.breaks && !cell.breaks.isValid && (
+                                      <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
+                                    )}
+                                  </div>
+                                  {showBreakDetails && cell.breaks && (
+                                    <div className="text-[9.5px] font-mono text-slate-600 dark:text-slate-300/90 mt-0.5 leading-tight truncate">
+                                      B1 {cell.breaks.firstBreakLabel.split('–')[0]} · L{' '}
+                                      {cell.breaks.lunchLabel.split('–')[0]} · B2{' '}
+                                      {cell.breaks.lastBreakLabel.split('–')[0]}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="text-center font-mono font-bold text-[11px]">
+                                  {cell.status}
+                                </div>
+                              )}
+                            </button>
+                          </td>
+                        );
+                      })}
+
+                      {/* Compliance Status */}
+                      <td className="px-2.5 py-2 text-center">
+                        {hasAlerts ? (
+                          <span
+                            title={agent.violations.join(' | ')}
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300"
+                          >
+                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                            {agent.violations[0]}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                            <CheckCircle2 className="w-3 h-3" />
+                            Valid
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* =====================================================================
+          5. INLINE INTERACTIVE CELL & BREAK POPOVER EDITOR
+         ===================================================================== */}
+      {editingTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 no-print"
+          onClick={() => setEditingCell(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-sky-500/40 bg-white dark:bg-slate-900 p-5 shadow-2xl space-y-4 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                  <span>{editingTarget.agent.agentName}</span>
+                  <span className="rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 px-2 py-0.5 text-xs font-mono">
+                    {editingTarget.dayKey}
+                  </span>
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Manually switch status, pick a compatible shift from your catalog, or customize breaks.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingCell(null)}
+                aria-label="Close cell editor"
+                className="rounded-lg p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Day Status Pills (OFF + Exception Codes) */}
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Day Off / Leave Code
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(['OFF', 'AL', 'MAT', 'RES', 'TERM', 'UPL', 'PAT'] as LeaveAllocationCode[]).map(
+                  (code) => {
+                    const active = editingTarget.assign.status === code;
+                    return (
+                      <button
+                        key={code}
+                        type="button"
+                        onClick={() =>
+                          applyCellAssignment(editingTarget.agent.agentId, editingTarget.dayKey, {
+                            status: code,
+                          })
+                        }
+                        className={`rounded-lg border px-2.5 py-1 text-xs font-bold transition cursor-pointer ${
+                          active
+                            ? 'border-[#0088c2] bg-[#0088c2] text-white'
+                            : 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 hover:border-sky-400'
+                        }`}
+                      >
+                        {code === 'OFF' ? 'OFF' : `${code} (${EXCEPTION_META[code as ExceptionCode].short})`}
+                      </button>
+                    );
+                  }
+                )}
+              </div>
+
+              {editingTarget.assign.status !== 'WORK' && editingTarget.assign.status !== 'OFF' && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    applyCellAssignment(
+                      editingTarget.agent.agentId,
+                      editingTarget.dayKey,
+                      { status: editingTarget.assign.status },
+                      true
+                    )
+                  }
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
+                >
+                  Apply {editingTarget.assign.status} across entire week (Mon → Sun)
+                </button>
+              )}
+            </div>
+
+            {/* External Shift Catalog Picker with Live Rule Guard */}
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Assign Shift (Pre-checked for ≤{rules.maxWeeklyStartDriftHours}h Drift &amp; ≥{rules.minInterShiftRestHours}h Rest)
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                {shiftCatalog.map((sh) => {
+                  const isCurrent =
+                    editingTarget.assign.status === 'WORK' &&
+                    editingTarget.assign.shiftId === sh.id;
+                  const compat = previewShiftCompatibility(
+                    editingTarget.agent,
+                    editingTarget.dayKey,
+                    sh
+                  );
+                  return (
+                    <button
+                      key={sh.id}
+                      type="button"
+                      onClick={() =>
+                        applyCellAssignment(editingTarget.agent.agentId, editingTarget.dayKey, {
+                          status: 'WORK',
+                          shiftId: sh.id,
+                          breaks: assignOptimalBreaksForShift(
+                            sh,
+                            new Array<number>(96).fill(2),
+                            rules.breakRules
+                          ),
+                        })
+                      }
+                      className={`rounded-xl border px-3 py-2 text-left transition cursor-pointer ${
+                        isCurrent
+                          ? 'border-[#00A3E0] bg-sky-500/15 ring-1 ring-[#00A3E0]'
+                          : compat.ok
+                            ? 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 hover:border-sky-400'
+                            : 'border-amber-500/35 bg-amber-500/5 hover:border-amber-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between font-mono text-xs font-bold">
+                        <span>{sh.label}</span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            compat.ok
+                              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                              : 'bg-amber-500/20 text-amber-600 dark:text-amber-300'
+                          }`}
+                        >
+                          {compat.reason}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Interactive Break Timeline Editor (when status === WORK & shift exists) */}
+            {editingTarget.assign.status === 'WORK' &&
+              editingTarget.assign.shiftId &&
+              shiftMap.get(editingTarget.assign.shiftId) &&
+              editingTarget.assign.breaks && (() => {
+                const activeShift = shiftMap.get(editingTarget.assign.shiftId!)!;
+                const br = editingTarget.assign.breaks!;
+                const bOffsets = Array.from(
+                  { length: Math.max(1, Math.floor((activeShift.durationMin - 30) / 15)) },
+                  (_, idx) => (idx + 1) * 15
+                );
+                const updateBreaks = (o1: number, oL: number, o2: number) => {
+                  const nextBr = buildBreakAssignment(activeShift, o1, oL, o2, rules.breakRules);
+                  applyCellAssignment(editingTarget.agent.agentId, editingTarget.dayKey, {
+                    breaks: nextBr,
+                  });
+                };
+
+                return (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                        Sub-Interval Breaks (15m + 30m Lunch + 15m)
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          br.isValid
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                        }`}
+                      >
+                        Max Streak {(br.maxContinuousWorkMin / 60).toFixed(2)}h · Min Gap {br.minInterBreakGapMin}m
+                      </span>
+                    </div>
+
+                    {/* Visual Break Bar along the shift timeline */}
+                    <div className="relative h-4 w-full rounded-lg overflow-hidden bg-sky-500/20 border border-sky-500/30">
+                      <div
+                        style={{
+                          left: `${(br.firstBreakOffsetMin / activeShift.durationMin) * 100}%`,
+                          width: `${(rules.breakRules.firstBreakMin / activeShift.durationMin) * 100}%`,
+                        }}
+                        className="absolute top-0 bottom-0 bg-[#00A3E0]"
+                        title={`First Break: ${br.firstBreakLabel}`}
+                      />
+                      <div
+                        style={{
+                          left: `${(br.lunchOffsetMin / activeShift.durationMin) * 100}%`,
+                          width: `${(rules.breakRules.lunchMin / activeShift.durationMin) * 100}%`,
+                        }}
+                        className="absolute top-0 bottom-0 bg-[#14b8a6]"
+                        title={`Lunch: ${br.lunchLabel}`}
+                      />
+                      <div
+                        style={{
+                          left: `${(br.lastBreakOffsetMin / activeShift.durationMin) * 100}%`,
+                          width: `${(rules.breakRules.lastBreakMin / activeShift.durationMin) * 100}%`,
+                        }}
+                        className="absolute top-0 bottom-0 bg-[#00C389]"
+                        title={`Last Break: ${br.lastBreakLabel}`}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-[11px]">
+                      <div>
+                        <label className="block text-slate-500 mb-0.5">First 15m</label>
+                        <select
+                          value={br.firstBreakOffsetMin}
+                          onChange={(e) =>
+                            updateBreaks(Number(e.target.value), br.lunchOffsetMin, br.lastBreakOffsetMin)
+                          }
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                        >
+                          {bOffsets.map((off) => (
+                            <option key={off} value={off}>
+                              {formatMinutesHHMM(activeShift.startMin + off)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-slate-500 mb-0.5">Lunch 30m</label>
+                        <select
+                          value={br.lunchOffsetMin}
+                          onChange={(e) =>
+                            updateBreaks(br.firstBreakOffsetMin, Number(e.target.value), br.lastBreakOffsetMin)
+                          }
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                        >
+                          {bOffsets.map((off) => (
+                            <option key={off} value={off}>
+                              {formatMinutesHHMM(activeShift.startMin + off)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-slate-500 mb-0.5">Last 15m</label>
+                        <select
+                          value={br.lastBreakOffsetMin}
+                          onChange={(e) =>
+                            updateBreaks(br.firstBreakOffsetMin, br.lunchOffsetMin, Number(e.target.value))
+                          }
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono"
+                        >
+                          {bOffsets.map((off) => (
+                            <option key={off} value={off}>
+                              {formatMinutesHHMM(activeShift.startMin + off)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setEditingCell(null)}
+                className="rounded-xl bg-[#0088c2] hover:bg-[#0073a8] text-white px-4 py-1.5 text-xs font-bold cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          6. DAILY SUMMARY ROLLUP TABLE
+         ===================================================================== */}
+      <section className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
+        <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-100">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+            Weekly Mon → Sun Coverage Audit Summary (Forecast × Erlang Required × Net Scheduled)
+          </div>
+          <span className="text-[11px] font-mono text-slate-400">
+            Granularity: {erlangConfig.granularityMin} min
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="px-4 py-2 text-left">Day</th>
+                <th className="px-4 py-2 text-left">Forecast Date</th>
+                <th className="px-4 py-2 text-right">Forecast Calls</th>
+                <th className="px-4 py-2 text-right">Req Prod Hrs</th>
+                <th className="px-4 py-2 text-right">Gross Shift Hrs</th>
+                <th className="px-4 py-2 text-right">Net Paid Hrs (-Breaks)</th>
+                <th className="px-4 py-2 text-right">Coverage %</th>
+                <th className="px-4 py-2 text-right">Peak Req / Net</th>
+                <th className="px-4 py-2 text-right">Low Slots</th>
+                <th className="px-4 py-2 text-right">Proj SL %</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70 font-mono">
+              {dailyTotals.map((d) => (
+                <tr key={d.dayKey} className="hover:bg-sky-500/5">
+                  <td className="px-4 py-2 font-bold text-slate-900 dark:text-white">{d.dayKey}</td>
+                  <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{d.dateIso}</td>
+                  <td className="px-4 py-2 text-right">{d.forecastVolume.toLocaleString()}</td>
+                  <td className="px-4 py-2 text-right">{d.requiredProdHours.toFixed(1)}h</td>
+                  <td className="px-4 py-2 text-right text-slate-500">{d.scheduledGrossHours.toFixed(1)}h</td>
+                  <td className="px-4 py-2 text-right font-bold text-sky-600 dark:text-sky-400">
+                    {d.scheduledNetHours.toFixed(1)}h
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <span
+                      className={`font-bold ${
+                        d.coveragePct >= 95
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : d.coveragePct >= 85
+                            ? 'text-sky-600 dark:text-sky-400'
+                            : 'text-amber-600 dark:text-amber-400'
+                      }`}
+                    >
+                      {d.coveragePct.toFixed(1)}%
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {d.peakRequired.toFixed(1)} / {d.peakScheduledNet.toFixed(1)}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {d.understaffedIntervals > 0 ? (
+                      <span className="text-amber-600 dark:text-amber-400 font-bold">
+                        {d.understaffedIntervals}
+                      </span>
+                    ) : (
+                      <span className="text-emerald-600 dark:text-emerald-400">0</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right font-bold">
+                    {d.avgProjectedSlPct.toFixed(1)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+};

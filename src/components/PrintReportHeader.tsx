@@ -2,7 +2,7 @@ import React from 'react';
 import { BrandWfmEmblem } from './ProMaxIcons.tsx';
 
 interface PrintReportHeaderProps {
-  activeTab: 'tab1' | 'tab2' | 'tab3';
+  activeTab: 'tab1' | 'tab2' | 'tab3' | 'tab4';
   monthlyVolume: number;
   monthDays: number;
   hoops: number;
@@ -13,10 +13,11 @@ interface PrintReportHeaderProps {
   finalGrossFte: number;
 }
 
-const TAB_TITLES: Record<'tab1' | 'tab2' | 'tab3', string> = {
+const TAB_TITLES: Record<'tab1' | 'tab2' | 'tab3' | 'tab4', string> = {
   tab1: '1. Forecasting Studio & Future Horizons',
   tab2: '2. Intraday Interval & Erlang C/A Staffing Plan',
   tab3: '3. Monthly Capacity Plan & FTE Shrinkage Waterfall',
+  tab4: '4. Agent Shift Scheduling, Leave Pool & Break Roster',
 };
 
 export const PrintReportHeader: React.FC<PrintReportHeaderProps> = ({

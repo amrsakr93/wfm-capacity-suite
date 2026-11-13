@@ -10,10 +10,14 @@ import type {
   FutureHorizonSummary,
   HistoricalPoint,
   IntervalRowInput,
+  ScheduleGenerationResult,
+  SchedulingRules,
+  ShiftTemplate,
   WhatIfCell,
 } from './types.ts';
 import { buildFutureHorizonSummary, FORECAST_MODEL_NAMES } from './forecasting.ts';
 import { runErlangPlanner, solveRequiredAgents } from './erlang.ts';
+import { EXCEPTION_META, WEEK_DAYS } from './scheduling.ts';
 import {
   buildDateSpecificCurve,
   buildIntervalInputsForGranularity,
@@ -1775,5 +1779,420 @@ export async function exportFullSuiteWorkbook(params: {
   await downloadWorkbook(
     wb,
     `WFM-Executive-Master-Report-${new Date().toISOString().slice(0, 10)}.xlsx`
+  );
+}
+
+/**
+ * Tab 4 Export: Styled Concentrix Weekly Agent Roster, 15-Min Break Schedule & Intraday Coverage Dashboard.
+ */
+export async function buildSchedulingWorkbook(params: {
+  scheduleResult: ScheduleGenerationResult;
+  shiftCatalog: ShiftTemplate[];
+  rules: SchedulingRules;
+  erlangConfig: ErlangConfig;
+}): Promise<ExcelJS.Workbook> {
+  const { scheduleResult, shiftCatalog, rules, erlangConfig } = params;
+  const ExcelJSClass = await loadExcelJS();
+  const wb = new ExcelJSClass.Workbook();
+  wb.creator = 'WFM & Capacity Suite — wfmforall.com';
+  wb.created = new Date();
+
+  const shiftMap = new Map(shiftCatalog.map((s) => [s.id, s]));
+  const { summary, visibleOutputAgents, dailyTotals, coverageByDay } = scheduleResult;
+
+  // =========================================================================
+  // SHEET 1: WEEKLY AGENT ROSTER & 15M BREAK STAGGERING
+  // =========================================================================
+  const wsRoster = wb.addWorksheet('1_Weekly_Agent_Roster', {
+    properties: { tabColor: { argb: CNX.TEAL_ACCENT } },
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  const rCols = 13;
+  buildExecutiveBanner({
+    ws: wsRoster,
+    colCount: rCols,
+    title: 'WFM AGENT SHIFT SCHEDULE & STAGGERED BREAK ROSTER (MON → SUN)',
+    subtitle: `Max ${rules.maxWorkdaysPerWeek}d/wk · OFF Pattern: Consecutive${rules.allowSunMonSplitOff ? ' + Sun+Mon Split' : ''} · Drift ≤${rules.maxWeeklyStartDriftHours}h · Rest ≥${rules.minInterShiftRestHours}h · Breaks: ${rules.breakRules.firstBreakMin}m/${rules.breakRules.lunchMin}m/${rules.breakRules.lastBreakMin}m`,
+    badgeText: `Schedulable: ${summary.activeSchedulableCount}\nCov: ${summary.avgCoveragePct.toFixed(1)}%`,
+  });
+  wsRoster.getRow(4).height = 10;
+
+  renderKpiCards(wsRoster, 5, [
+    {
+      colStart: 1,
+      colSpan: 3,
+      label: 'Schedulable Agents',
+      value: summary.activeSchedulableCount,
+      numFmt: '#,##0',
+      sublabel: `Total Input: ${summary.totalRosterInput} (AL Input Excl: ${summary.annualExcluded})`,
+      accentArgb: CNX.BLUE_PRIMARY,
+    },
+    {
+      colStart: 4,
+      colSpan: 2,
+      label: 'Weekly Net Coverage',
+      value: summary.avgCoveragePct,
+      numFmt: '0.0"%"',
+      sublabel: `${summary.totalScheduledNetHours.toFixed(1)}h / ${summary.totalRequiredProdHours.toFixed(1)}h req`,
+      accentArgb: summary.avgCoveragePct >= 95 ? CNX.TEAL_ACCENT : CNX.NAVY_BRAND,
+      valueArgb: summary.avgCoveragePct >= 95 ? CNX.GREEN_FG : CNX.AMBER_FG,
+    },
+    {
+      colStart: 6,
+      colSpan: 3,
+      label: 'Projected Weekly SL %',
+      value: summary.projectedWeeklySlPct,
+      numFmt: '0.0"%"',
+      sublabel: `Target ${erlangConfig.slTargetPct}% in ${erlangConfig.slThresholdSec}s (${summary.understaffedIntervalsTotal} low slots)`,
+      accentArgb: summary.projectedWeeklySlPct >= erlangConfig.slTargetPct ? CNX.TEAL_ACCENT : CNX.NAVY_BRAND,
+      valueArgb: summary.projectedWeeklySlPct >= erlangConfig.slTargetPct ? CNX.GREEN_FG : CNX.AMBER_FG,
+    },
+    {
+      colStart: 9,
+      colSpan: 3,
+      label: 'Full-Week Exclusions',
+      value: summary.fullWeekExceptionsCount,
+      numFmt: '#,##0',
+      sublabel: `MAT / RES / TERM / UPL / PAT locked`,
+      accentArgb: CNX.NAVY_BRAND,
+    },
+    {
+      colStart: 12,
+      colSpan: 2,
+      label: 'Rule Audit Status',
+      value: summary.violationAgentsCount === 0 ? '100% COMPLIANT' : `${summary.violationAgentsCount} ALERTS`,
+      sublabel: `Valid Breaks: ${summary.validBreakRatePct.toFixed(1)}%`,
+      accentArgb: summary.violationAgentsCount === 0 ? CNX.TEAL_ACCENT : CNX.NAVY_BRAND,
+      valueArgb: summary.violationAgentsCount === 0 ? CNX.GREEN_FG : CNX.ROSE_FG,
+    },
+  ]);
+  wsRoster.getRow(8).height = 10;
+
+  const rSecRow = renderSectionHeading(
+    wsRoster,
+    9,
+    1,
+    rCols,
+    `1. AGENT ROSTER MATRIX (${visibleOutputAgents.length} DISPLAYED${rules.annualVisibilityInOutput === 'exclude' && summary.annualExcluded > 0 ? ` · ${summary.annualExcluded} ANNUAL LEAVE INPUTS EXCLUDED FROM OUTPUT` : ''})`,
+    CNX.NAVY_DARK
+  );
+
+  const rosterCols: TableColumnSpec[] = [
+    { header: 'Agent Name / ID', align: 'left', minWidth: 22 },
+    { header: 'OFF Pattern', align: 'center', minWidth: 16 },
+    ...WEEK_DAYS.map((dk) => {
+      const dt = dailyTotals.find((d) => d.dayKey === dk);
+      return {
+        header: `${dk}${dt ? `\n(${dt.dateIso.slice(5)})` : ''}`,
+        align: 'center' as const,
+        minWidth: 21,
+      };
+    }),
+    { header: 'Work d', align: 'center', minWidth: 9 },
+    { header: 'Drift h', align: 'center', minWidth: 9 },
+    { header: 'Min Rest', align: 'center', minWidth: 10 },
+    { header: 'Audit', align: 'center', minWidth: 18 },
+  ];
+
+  const rosterRows = visibleOutputAgents.map((agent) => {
+    const dayCells = WEEK_DAYS.map((dk) => {
+      const a = agent.assignments[dk];
+      if (!a) return 'OFF';
+      if (a.status !== 'WORK') return a.status;
+      const sh = a.shiftId ? shiftMap.get(a.shiftId) : null;
+      const br = a.breaks;
+      if (!sh) return 'WORK';
+      if (!br) return sh.label;
+      return `${sh.label}\nB1 ${br.firstBreakLabel.split('–')[0]} | L ${br.lunchLabel.split('–')[0]} | B2 ${br.lastBreakLabel.split('–')[0]}`;
+    });
+    return [
+      agent.agentName,
+      agent.offPatternLabel,
+      ...dayCells,
+      agent.workDaysCount,
+      agent.workDaysCount > 0 ? `${agent.shiftBandSpanHours.toFixed(1)}h` : '—',
+      agent.minRestHoursObserved !== null ? `${agent.minRestHoursObserved.toFixed(1)}h` : '—',
+      agent.violations.length === 0 ? 'Valid' : agent.violations[0],
+    ];
+  });
+
+  const rosterTbl = renderStyledTable({
+    ws: wsRoster,
+    startRow: rSecRow,
+    columns: rosterCols,
+    rows: rosterRows,
+    freezeHeader: true,
+    showGridLines: false,
+    onCell: (cell, val, _rowVals, rIdx, cIdx) => {
+      const agent = visibleOutputAgents[rIdx];
+      if (!agent) return;
+      cell.alignment = {
+        horizontal: cIdx === 0 ? 'left' : 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+      if (cIdx === 0) {
+        cell.font = { name: EXCEL_FONT, size: 9.5, bold: true, color: { argb: CNX.NAVY_DARK } };
+      } else if (cIdx >= 2 && cIdx <= 8) {
+        const s = String(val ?? '');
+        if (s === 'OFF') {
+          stylePillCell(cell, 'neutral', true);
+        } else if (['MAT', 'RES', 'TERM', 'UPL', 'PAT', 'AL'].includes(s)) {
+          stylePillCell(cell, s === 'AL' ? 'info' : 'warn', true);
+        } else {
+          stylePillCell(cell, 'teal', false);
+          cell.font = { name: EXCEL_FONT, size: 8.5, bold: true, color: { argb: CNX.NAVY_DARK } };
+        }
+      } else if (cIdx === 12) {
+        stylePillCell(cell, agent.violations.length === 0 ? 'good' : 'bad', true);
+      }
+    },
+  });
+  for (let r = rosterTbl.firstDataRow; r <= rosterTbl.endRow; r++) {
+    wsRoster.getRow(r).height = 28;
+  }
+  paintDashboardBackdrop(wsRoster, rosterTbl.endRow + 2, rCols);
+
+  // =========================================================================
+  // SHEET 2: DAILY SUMMARY & INTRADAY INTERVAL COVERAGE
+  // =========================================================================
+  const wsCov = wb.addWorksheet('2_Coverage_Matrix', {
+    properties: { tabColor: { argb: CNX.BLUE_PRIMARY } },
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  const cCols = 11;
+  buildExecutiveBanner({
+    ws: wsCov,
+    colCount: cCols,
+    title: 'DAILY & INTRADAY INTERVAL COVERAGE VS ERLANG REQUIRED',
+    subtitle: `Forecast Horizon: Next Week (Mon → Sun) · Granularity: ${erlangConfig.granularityMin} min · SLA ${erlangConfig.slTargetPct}% / ${erlangConfig.slThresholdSec}s`,
+    badgeText: `Net Cov: ${summary.avgCoveragePct.toFixed(1)}%\nProj SL: ${summary.projectedWeeklySlPct.toFixed(1)}%`,
+  });
+  wsCov.getRow(4).height = 10;
+
+  const peakVolDayIdx = dailyTotals.reduce(
+    (bestIdx, d, idx, arr) => (d.forecastVolume > arr[bestIdx].forecastVolume ? idx : bestIdx),
+    0
+  );
+  const covChartPng = renderColumnDashboardChartPng({
+    title: 'Daily Net Scheduled Hours vs Peak Understaffing Risk (Mon → Sun)',
+    subtitle: 'Productive agent hours after deducting 15m + 30m + 15m breaks',
+    primaryLabel: 'Net Scheduled Hrs',
+    highlightLabel: 'Highest Volume Day',
+    secondaryLineLabel: 'Projected SL %',
+    bars: dailyTotals.map((d, idx) => ({
+      label: d.dayKey,
+      value: d.scheduledNetHours,
+      highlight: idx === peakVolDayIdx,
+      secondaryLinePct: Math.min(100, d.avgProjectedSlPct),
+    })),
+    width: 980,
+    height: 270,
+  });
+  let covRowCursor = 5;
+  if (covChartPng) {
+    embedPngChart(wb, wsCov, covChartPng, 0.15, 4.3, 980, 270);
+    covRowCursor = 21;
+  }
+
+  const dSecRow = renderSectionHeading(
+    wsCov,
+    covRowCursor,
+    1,
+    cCols,
+    '1. MON → SUN WEEKLY FORECAST VS SCHEDULED COVERAGE SUMMARY',
+    CNX.NAVY_BRAND
+  );
+  const dailyTbl = renderStyledTable({
+    ws: wsCov,
+    startRow: dSecRow,
+    columns: [
+      { header: 'Day', align: 'center', minWidth: 10 },
+      { header: 'Forecast Date', align: 'center', minWidth: 16 },
+      { header: 'Forecast Calls', align: 'right', minWidth: 16, numFmt: '#,##0' },
+      { header: 'Required Prod Hrs', align: 'right', minWidth: 18, numFmt: '#,##0.0' },
+      { header: 'Gross Shift Hrs', align: 'right', minWidth: 16, numFmt: '#,##0.0' },
+      { header: 'Net Paid Hrs (-Brk)', align: 'right', minWidth: 18, numFmt: '#,##0.0' },
+      { header: 'Coverage %', align: 'right', minWidth: 14, numFmt: '0.0"%"' },
+      { header: 'Peak Req Seats', align: 'right', minWidth: 15, numFmt: '0.0' },
+      { header: 'Peak Net Seats', align: 'right', minWidth: 15, numFmt: '0.0' },
+      { header: 'Low Intervals', align: 'center', minWidth: 14, numFmt: '#,##0' },
+      { header: 'Projected SL %', align: 'right', minWidth: 15, numFmt: '0.0"%"' },
+    ],
+    rows: dailyTotals.map((d) => [
+      d.dayKey,
+      d.dateIso,
+      d.forecastVolume,
+      d.requiredProdHours,
+      d.scheduledGrossHours,
+      d.scheduledNetHours,
+      d.coveragePct,
+      d.peakRequired,
+      d.peakScheduledNet,
+      d.understaffedIntervals,
+      d.avgProjectedSlPct,
+    ]),
+    showGridLines: false,
+    onCell: (cell, _val, _r, rIdx, cIdx) => {
+      const d = dailyTotals[rIdx];
+      if (!d) return;
+      if (cIdx === 6) {
+        stylePillCell(cell, d.coveragePct >= 96 ? 'good' : d.coveragePct >= 88 ? 'warn' : 'bad');
+      } else if (cIdx === 10) {
+        stylePillCell(
+          cell,
+          d.avgProjectedSlPct >= erlangConfig.slTargetPct ? 'good' : 'warn'
+        );
+      }
+    },
+  });
+
+  const intSecRow = renderSectionHeading(
+    wsCov,
+    dailyTbl.endRow + 2,
+    1,
+    cCols,
+    '2. FULL INTRADAY INTERVAL COVERAGE TELEMETRY (GROSS VS BREAK DEDUCTION VS NET FTE)',
+    CNX.NAVY_DARK
+  );
+  const allIntervalRows = WEEK_DAYS.flatMap((dk) =>
+    (coverageByDay[dk] ?? []).map((c) => [
+      c.dayKey,
+      c.dateIso,
+      c.timeLabel,
+      c.forecastVolume,
+      c.requiredSeats,
+      c.scheduledGrossHeads,
+      c.onBreakFte,
+      c.effectiveScheduledFte,
+      c.varianceFte,
+      c.projectedSlPct,
+      c.varianceFte >= 0 ? 'Covered' : c.varianceFte > -1 ? 'Tight' : 'Deficit',
+    ])
+  );
+  const intTbl = renderStyledTable({
+    ws: wsCov,
+    startRow: intSecRow,
+    columns: [
+      { header: 'Day', align: 'center', minWidth: 10 },
+      { header: 'Date', align: 'center', minWidth: 14 },
+      { header: 'Interval', align: 'center', minWidth: 12 },
+      { header: 'Fcst Calls', align: 'right', minWidth: 12, numFmt: '#,##0' },
+      { header: 'Req Seats', align: 'right', minWidth: 12, numFmt: '0.0' },
+      { header: 'Gross On Shift', align: 'right', minWidth: 14, numFmt: '0.0' },
+      { header: 'On Break FTE', align: 'right', minWidth: 14, numFmt: '0.00' },
+      { header: 'Net Effective', align: 'right', minWidth: 14, numFmt: '0.00' },
+      { header: 'Variance (+/-)', align: 'right', minWidth: 14, numFmt: '+0.00;-0.00;0.00' },
+      { header: 'Proj SL %', align: 'right', minWidth: 12, numFmt: '0.0"%"' },
+      { header: 'Status', align: 'center', minWidth: 12 },
+    ],
+    rows: allIntervalRows,
+    showGridLines: false,
+    onCell: (cell, val, _r, _rIdx, cIdx) => {
+      if (cIdx === 10) {
+        const s = String(val ?? '');
+        stylePillCell(cell, s === 'Covered' ? 'good' : s === 'Tight' ? 'warn' : 'bad');
+      }
+    },
+  });
+  paintDashboardBackdrop(wsCov, intTbl.endRow + 2, cCols);
+
+  // =========================================================================
+  // SHEET 3: LEAVE EXCLUSIONS, EXTERNAL SHIFT CATALOG & RULES
+  // =========================================================================
+  const wsRules = wb.addWorksheet('3_Leave_&_Shift_Rules', {
+    properties: { tabColor: { argb: CNX.NAVY_BRAND } },
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  const sCols = 8;
+  buildExecutiveBanner({
+    ws: wsRules,
+    colCount: sCols,
+    title: 'ROSTER EXCEPTIONS INPUT, EXTERNAL SHIFT CATALOG & POLICY RULES',
+    subtitle: 'Full audit trail of input leave deductions, imported shift catalog, and fatigue/break constraints',
+    badgeText: `Catalog: ${shiftCatalog.filter((s) => s.enabled).length} Shifts`,
+  });
+  wsRules.getRow(4).height = 10;
+
+  const exCounts: Record<string, number> = { AL: 0, MAT: 0, RES: 0, TERM: 0, UPL: 0, PAT: 0 };
+  for (const a of scheduleResult.agents) {
+    if (a.preAllocatedException) exCounts[a.preAllocatedException] = (exCounts[a.preAllocatedException] ?? 0) + 1;
+  }
+
+  const lSec = renderSectionHeading(
+    wsRules,
+    5,
+    1,
+    sCols,
+    '1. ROSTER POOL & LEAVE / ATTRITION DEDUCTIONS',
+    CNX.NAVY_DARK
+  );
+  const leaveTbl = renderStyledTable({
+    ws: wsRules,
+    startRow: lSec,
+    columns: [
+      { header: 'Code', align: 'center', minWidth: 12 },
+      { header: 'Exception Category', align: 'left', minWidth: 26 },
+      { header: 'Count', align: 'right', minWidth: 12, numFmt: '#,##0' },
+      { header: 'Handling Mode', align: 'left', minWidth: 44 },
+    ],
+    rows: (Object.keys(EXCEPTION_META) as (keyof typeof EXCEPTION_META)[]).map((code) => [
+      code,
+      EXCEPTION_META[code].label,
+      exCounts[code] ?? 0,
+      code === 'AL'
+        ? `Input-only deduction (${rules.annualVisibilityInOutput === 'exclude' ? 'Excluded from output roster' : 'Shown muted'}) · 0 interval coverage`
+        : 'Locked full week (Mon → Sun) across same status code · 0 interval coverage',
+    ]),
+    showGridLines: false,
+  });
+
+  const shSec = renderSectionHeading(
+    wsRules,
+    leaveTbl.endRow + 2,
+    1,
+    sCols,
+    '2. EXTERNAL SHIFT CATALOG & FATIGUE / BREAK CONSTRAINTS',
+    CNX.BLUE_PRIMARY
+  );
+  const shiftTbl = renderStyledTable({
+    ws: wsRules,
+    startRow: shSec,
+    columns: [
+      { header: 'Shift ID', align: 'left', minWidth: 18 },
+      { header: 'Window', align: 'center', minWidth: 18 },
+      { header: 'Gross Mins', align: 'right', minWidth: 14, numFmt: '#,##0' },
+      { header: 'Midnight Wrap', align: 'center', minWidth: 16 },
+      { header: 'Status', align: 'center', minWidth: 14 },
+    ],
+    rows: shiftCatalog.map((s) => [
+      s.id,
+      s.label,
+      s.durationMin,
+      s.wrapsMidnight ? 'Yes (+1d)' : 'Same Day',
+      s.enabled ? 'Active' : 'Disabled',
+    ]),
+    showGridLines: false,
+    onCell: (cell, val, _r, _rIdx, cIdx) => {
+      if (cIdx === 4) {
+        stylePillCell(cell, val === 'Active' ? 'good' : 'neutral');
+      }
+    },
+  });
+  paintDashboardBackdrop(wsRules, shiftTbl.endRow + 2, sCols);
+
+  return wb;
+}
+
+export async function exportSchedulingWorkbook(params: {
+  scheduleResult: ScheduleGenerationResult;
+  shiftCatalog: ShiftTemplate[];
+  rules: SchedulingRules;
+  erlangConfig: ErlangConfig;
+}): Promise<void> {
+  const wb = await buildSchedulingWorkbook(params);
+  await downloadWorkbook(
+    wb,
+    `WFM-Agent-Shift-Schedule-${new Date().toISOString().slice(0, 10)}.xlsx`
   );
 }

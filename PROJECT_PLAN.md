@@ -34,8 +34,13 @@
 | T6 | Auth Gate Core (`lib/auth-core.ts` + `api/auth/*.ts`): Power Automate HTTP webhook proxy (Teams + Outlook channel), HMAC-SHA256 `HttpOnly` cookie session, explicit Demo Preview challenge mode | `pro-backend-architect` | Pending |
 | T7 | Comprehensive Unit Test Suite (`tests/*.test.ts`): Parser cross-tab validation, Carlberg & ErlangXL97 golden verification, Capacity no-double-counting check, Auth HMAC/fail-closed checks | `pro-qa-testing-architect` | Pending |
 | T8 | UI Design System & Bilingual App Shell + Auth Login Gate (`src/components/AuthGate.tsx`, Header, Stepper, Setup Guide Drawer) | `impeccable` + `bilingual-business-writing` | Pending |
-| T9 | Interactive 3-Tab UI + Charts (`Tab1Forecasting.tsx`, `Tab2Erlang.tsx`, `Tab3Capacity.tsx`, SVG Charts, Excel `.xlsx` & Print PDF Export) | `interactive-bi-dashboard-builder` + `impeccable` | Pending |
-| T10 | Docs (`docs/POWER_AUTOMATE_SETUP.md`, `README.md`), Build Check, Headless Browser E2E Verification, Memory Save | `pro-qa-testing-architect` + `deploy-to-vercel` | Pending |
+| T9 | Interactive 3-Tab UI + Charts (`Tab1Forecasting.tsx`, `Tab2Erlang.tsx`, `Tab3Capacity.tsx`, SVG Charts, Excel `.xlsx` & Print PDF Export) | `interactive-bi-dashboard-builder` + `impeccable` | Done |
+| T10 | Docs (`docs/POWER_AUTOMATE_SETUP.md`, `README.md`), Build Check, Headless Browser E2E Verification, Memory Save | `pro-qa-testing-architect` + `deploy-to-vercel` | Done |
+| T11 | Tab 4 Scheduling Types & TDD Test Suite (`tests/scheduling.test.ts`) | `test-driven-development` + `pro-qa-testing-architect` | Done |
+| T12 | Tab 4 Scheduling Engine, External Shift/Roster Parsers & 15m Break Optimizer (`src/engine/scheduling.ts`) | `pro-data-analysis-suite` + `aeo` | Done |
+| T13 | Kinetic SVG Icons, Interactive Roster Coverage Chart & Tab 4 Styled Excel Dashboard Export | `impeccable` + `ui-ux-pro-max` | Done |
+| T14 | Interactive Tab 4 Studio (`src/components/Tab4Scheduling.tsx`) + `App.tsx` / `PrintReportHeader.tsx` Integration | `interactive-bi-dashboard-builder` + `frontend-app-engineering` | Done |
+| T15 | Full QA Verification (`typecheck`, Unit Tests, Playwright Night/Day E2E), Live Deploy, Backup Sync & Memory Save | `pro-qa-testing-architect` + `verification-before-completion` | Done |
 
 ---
 

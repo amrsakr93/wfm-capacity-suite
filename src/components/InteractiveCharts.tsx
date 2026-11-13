@@ -1,5 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { ErlangAgentMode, IntervalStaffingRow } from '../engine/types.ts';
+import type {
+  DailyCoverageSummary,
+  DayKey,
+  ErlangAgentMode,
+  IntervalCoverageCell,
+  IntervalStaffingRow,
+} from '../engine/types.ts';
 
 function useContainerWidth(defaultWidth = 1360): [React.RefObject<HTMLDivElement | null>, number] {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -1047,6 +1053,290 @@ export const InteractiveStaffingChart: React.FC<{
             <div className="flex justify-between gap-4 text-[#005A8D] dark:text-[#7CC4E4]">
               <span>Occupancy:</span>
               <span className="font-bold">{hovered.occupancyPct.toFixed(1)}%</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const InteractiveRosterCoverageChart: React.FC<{
+  selectedDay: DayKey;
+  cells: IntervalCoverageCell[];
+  dailyTotals: DailyCoverageSummary[];
+  viewMode: 'intraday' | 'weekly';
+}> = ({ selectedDay, cells, dailyTotals, viewMode }) => {
+  const [containerRef, w] = useContainerWidth(1480);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [showGross, setShowGross] = useState(true);
+  const [showRequiredLine, setShowRequiredLine] = useState(true);
+
+  const items =
+    viewMode === 'intraday'
+      ? cells.map((c) => ({
+          label: c.timeLabel,
+          req: c.requiredSeats,
+          gross: c.scheduledGrossHeads,
+          net: c.effectiveScheduledFte,
+          brk: c.onBreakFte,
+          variance: c.varianceFte,
+          volume: c.forecastVolume,
+          slPct: c.projectedSlPct,
+        }))
+      : dailyTotals.map((d) => ({
+          label: `${d.dayKey} (${d.dateIso.slice(5)})`,
+          req: d.requiredProdHours,
+          gross: d.scheduledGrossHours,
+          net: d.scheduledNetHours,
+          brk: Number((d.scheduledGrossHours - d.scheduledNetHours).toFixed(2)),
+          variance: Number((d.scheduledNetHours - d.requiredProdHours).toFixed(2)),
+          volume: d.forecastVolume,
+          slPct: d.avgProjectedSlPct,
+        }));
+
+  const h = 305;
+  const padX = 52;
+  const padRight = 24;
+  const padY = 24;
+  const padBot = 34;
+  const plotW = Math.max(200, w - padX - padRight);
+  const plotH = h - padY - padBot;
+
+  const maxY = Math.max(
+    1,
+    ...items.map((it) => Math.max(it.req, it.gross, it.net))
+  );
+  const yScale = (val: number) => padY + plotH - (val / maxY) * plotH;
+  const slotW = plotW / Math.max(1, items.length);
+  const barW = Math.max(4, Math.min(viewMode === 'weekly' ? 54 : 18, slotW * 0.68));
+
+  const reqCoords = items.map((it, idx) => ({
+    x: padX + (idx + 0.5) * slotW,
+    y: yScale(it.req),
+  }));
+
+  const labelStep = viewMode === 'weekly' ? 1 : Math.max(1, Math.ceil(items.length / 10));
+  const hovered = hoverIdx !== null ? items[hoverIdx] : null;
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full cnx-chart-surface rounded-2xl border p-4 select-none"
+      onMouseLeave={() => setHoverIdx(null)}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
+            <span className="w-2 h-2 rounded-sm bg-[#25E2CC]" />
+            {viewMode === 'intraday' ? `Net Productive FTE (${selectedDay})` : 'Net Scheduled Prod Hours'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowGross((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border transition cursor-pointer ${
+              showGross
+                ? 'bg-sky-500/15 border-sky-500/40 text-sky-700 dark:text-sky-300'
+                : 'border-slate-300 dark:border-slate-700 text-slate-400 opacity-60'
+            }`}
+          >
+            <span className="w-2 h-2 rounded-sm bg-[#00A3E0]/55 border border-[#00A3E0]" />
+            Gross Punch-In (Before Breaks)
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowRequiredLine((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border transition cursor-pointer ${
+              showRequiredLine
+                ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-700 dark:text-indigo-300'
+                : 'border-slate-300 dark:border-slate-700 text-slate-400 opacity-60'
+            }`}
+          >
+            <span className="w-3 h-0.5 bg-indigo-500 dark:bg-sky-200 inline-block" />
+            Required Erlang Curve
+          </button>
+        </div>
+        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+          Gap between Gross &amp; Net shows live 15m/30m Break staggering · Hover to inspect telemetry
+        </span>
+      </div>
+
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="w-full h-auto overflow-visible">
+        <defs>
+          <linearGradient id="cnxNetBarGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--cnx-seat-top)" stopOpacity="0.96" />
+            <stop offset="100%" stopColor="var(--cnx-erlang-bot)" stopOpacity="0.72" />
+          </linearGradient>
+          <linearGradient id="cnxDeficitBarGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.92" />
+            <stop offset="100%" stopColor="#B45309" stopOpacity="0.68" />
+          </linearGradient>
+        </defs>
+
+        {[0, 0.25, 0.5, 0.75, 1].map((r, i) => {
+          const yPos = padY + plotH * (1 - r);
+          return (
+            <g key={i}>
+              <line
+                x1={padX}
+                y1={yPos}
+                x2={padX + plotW}
+                y2={yPos}
+                stroke="var(--cnx-chart-grid)"
+                strokeDasharray="3 4"
+              />
+              <text
+                x={padX - 8}
+                y={yPos + 4}
+                textAnchor="end"
+                className="text-[10px] font-mono"
+                fill="var(--cnx-chart-axis)"
+              >
+                {Math.round(maxY * r)}
+              </text>
+            </g>
+          );
+        })}
+
+        {items.map((it, idx) => {
+          const xCenter = padX + (idx + 0.5) * slotW;
+          const hGross = Math.max(0, (it.gross / maxY) * plotH);
+          const hNet = Math.max(0, (it.net / maxY) * plotH);
+          const isUnder = it.req > 0 && it.net + 0.25 < it.req;
+          const netWave = getBarWaveStyle(idx, hoverIdx, isUnder ? 0.96 : 0.9, 1);
+
+          return (
+            <g key={idx}>
+              {showGross && it.gross > 0 && (
+                <rect
+                  x={xCenter - barW * 0.52}
+                  y={yScale(it.gross)}
+                  width={barW * 1.04}
+                  height={hGross}
+                  rx={3}
+                  fill="var(--cnx-chart-actual)"
+                  fillOpacity="0.22"
+                  stroke="var(--cnx-chart-actual)"
+                  strokeOpacity="0.45"
+                  strokeWidth={1}
+                />
+              )}
+              {it.net > 0 && (
+                <rect
+                  x={xCenter - barW * 0.44}
+                  y={yScale(it.net)}
+                  width={barW * 0.88}
+                  height={hNet}
+                  rx={3}
+                  fill={isUnder ? 'url(#cnxDeficitBarGrad)' : 'url(#cnxNetBarGrad)'}
+                  className="cnx-svg-bar cnx-svg-bar-enter"
+                  style={netWave}
+                />
+              )}
+              {(idx % labelStep === 0 || idx === items.length - 1) && (
+                <text
+                  x={xCenter}
+                  y={h - 10}
+                  textAnchor="middle"
+                  className="text-[10px] font-mono"
+                  fill="var(--cnx-chart-axis)"
+                >
+                  {it.label}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {showRequiredLine && reqCoords.length > 1 && (
+          <path
+            d={toSmoothSpline(reqCoords)}
+            fill="none"
+            stroke="var(--cnx-chart-occ)"
+            strokeWidth={2.5}
+            strokeDasharray="5 3"
+          />
+        )}
+
+        {hovered && hoverIdx !== null && (
+          <>
+            <line
+              x1={padX + (hoverIdx + 0.5) * slotW}
+              y1={padY}
+              x2={padX + (hoverIdx + 0.5) * slotW}
+              y2={padY + plotH}
+              stroke="var(--cnx-chart-future)"
+              strokeWidth={1.6}
+              strokeDasharray="3 3"
+            />
+            <circle
+              cx={padX + (hoverIdx + 0.5) * slotW}
+              cy={yScale(hovered.req)}
+              r={4.2}
+              fill="var(--cnx-chart-occ)"
+              stroke="var(--cnx-chart-node-stroke)"
+              strokeWidth={1.8}
+            />
+          </>
+        )}
+
+        {items.map((_, idx) => (
+          <rect
+            key={idx}
+            x={padX + idx * slotW}
+            y={padY}
+            width={slotW}
+            height={plotH}
+            fill="transparent"
+            className="cursor-crosshair"
+            onMouseEnter={() => setHoverIdx(idx)}
+          />
+        ))}
+      </svg>
+
+      {hovered && hoverIdx !== null && (
+        <div
+          className="cnx-chart-tooltip cnx-tooltip-glide pointer-events-none absolute top-12 z-30 rounded-xl border border-[#25E2CC]/45 bg-[#001421]/95 px-3.5 py-2.5 text-xs text-white shadow-xl backdrop-blur-md"
+          style={{
+            left: `${Math.min(72, Math.max(4, (hoverIdx / Math.max(1, items.length - 1)) * 100))}%`,
+          }}
+        >
+          <div className="font-mono font-bold text-[#0F766E] dark:text-[#25E2CC] mb-1">
+            {viewMode === 'intraday' ? `${selectedDay} · ${hovered.label}` : hovered.label}
+          </div>
+          <div className="space-y-0.5 font-mono text-[11px]">
+            <div className="flex justify-between gap-4 text-slate-700 dark:text-slate-200">
+              <span>Forecast Calls:</span>
+              <span className="font-bold">{hovered.volume.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between gap-4 text-indigo-600 dark:text-indigo-300">
+              <span>{viewMode === 'intraday' ? 'Required Seats:' : 'Req Prod Hrs:'}</span>
+              <span className="font-bold">{hovered.req.toFixed(1)}</span>
+            </div>
+            <div className="flex justify-between gap-4 text-[#0073A8] dark:text-[#00A3E0]">
+              <span>{viewMode === 'intraday' ? 'Gross Clock-In:' : 'Gross Hrs:'}</span>
+              <span className="font-bold">{hovered.gross.toFixed(1)}</span>
+            </div>
+            <div className="flex justify-between gap-4 text-amber-600 dark:text-amber-300">
+              <span>{viewMode === 'intraday' ? 'On Break (-FTE):' : 'Break Deduction:'}</span>
+              <span className="font-bold">-{hovered.brk.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between gap-4 text-[#0D826E] dark:text-[#00C389]">
+              <span>{viewMode === 'intraday' ? 'Net Productive:' : 'Net Paid Hrs:'}</span>
+              <span className="font-bold">{hovered.net.toFixed(2)}</span>
+            </div>
+            <div
+              className={`flex justify-between gap-4 font-bold ${
+                hovered.variance >= 0
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-amber-600 dark:text-amber-400'
+              }`}
+            >
+              <span>Variance (+/-):</span>
+              <span>
+                {hovered.variance >= 0 ? '+' : ''}
+                {hovered.variance.toFixed(2)} · SL {hovered.slPct.toFixed(1)}%
+              </span>
             </div>
           </div>
         </div>

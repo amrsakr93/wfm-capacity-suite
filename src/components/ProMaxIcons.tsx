@@ -307,3 +307,124 @@ export const ProMaxIconBadge: React.FC<{
     </div>
   );
 };
+
+export const ShiftSchedulerIcon: React.FC<IconProps> = ({ className = '', size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 28 28"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={`promax-svg-icon ${className}`}
+    aria-hidden="true"
+  >
+    <rect
+      x="3.5"
+      y="5.5"
+      width="21"
+      height="18"
+      rx="3.5"
+      fill="#00A3E0"
+      fillOpacity="0.14"
+      stroke="#00A3E0"
+      strokeWidth="1.7"
+    />
+    <path d="M3.5 10.5H24.5" stroke="#00A3E0" strokeOpacity="0.45" strokeWidth="1.4" />
+    <path d="M9 3.5V6.8M19 3.5V6.8" stroke="#25E2CC" strokeWidth="1.8" strokeLinecap="round" />
+    {/* Staggered Live Shift Tracks */}
+    <rect x="6" y="13" width="9.5" height="2.4" rx="1.2" fill="#00A3E0" className="cnx-bar-pulse-1" />
+    <rect x="10" y="16.6" width="11.5" height="2.4" rx="1.2" fill="#25E2CC" className="cnx-bar-pulse-2" />
+    <rect x="7" y="20" width="8.5" height="2" rx="1" fill="#00C389" className="cnx-bar-pulse-3" />
+    <circle cx="22.5" cy="14.2" r="2.2" fill="#25E2CC" className="cnx-node-blink-1" />
+  </svg>
+);
+
+export const BreakStaggerIcon: React.FC<IconProps> = ({ className = '', size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 28 28"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={`promax-svg-icon ${className}`}
+    aria-hidden="true"
+  >
+    <path
+      d="M4 18.5H24"
+      stroke="#00A3E0"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeDasharray="3 2"
+      className="cnx-stream-right"
+    />
+    {/* B1 15m -> Lunch 30m -> B2 15m Stagger Nodes */}
+    <rect x="4.5" y="11" width="4.5" height="5" rx="1.3" fill="#00A3E0" className="cnx-bar-pulse-1" />
+    <rect x="11" y="7" width="6" height="9" rx="1.6" fill="#25E2CC" className="cnx-bar-pulse-2" />
+    <rect x="19" y="11" width="4.5" height="5" rx="1.3" fill="#00C389" className="cnx-bar-pulse-3" />
+    <circle cx="14" cy="22" r="1.8" fill="#25E2CC" className="cnx-node-blink-2" />
+  </svg>
+);
+
+export const RosterPoolIcon: React.FC<IconProps> = ({ className = '', size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 28 28"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={`promax-svg-icon ${className}`}
+    aria-hidden="true"
+  >
+    <g className="cnx-orbit-cw" style={{ transformOrigin: '14px 14px' }}>
+      <circle cx="14" cy="14" r="11" stroke="#00A3E0" strokeOpacity="0.28" strokeWidth="1.4" strokeDasharray="4 4" />
+    </g>
+    <circle cx="14" cy="10" r="3" fill="#25E2CC" fillOpacity="0.28" stroke="#25E2CC" strokeWidth="1.6" />
+    <circle cx="8" cy="13.5" r="2.2" fill="#00A3E0" fillOpacity="0.24" stroke="#00A3E0" strokeWidth="1.4" />
+    <circle cx="20" cy="13.5" r="2.2" fill="#00C389" fillOpacity="0.24" stroke="#00C389" strokeWidth="1.4" />
+    <path d="M9 21C9.6 17.8 11.6 16.2 14 16.2C16.4 16.2 18.4 17.8 19 21" stroke="#25E2CC" strokeWidth="1.7" strokeLinecap="round" />
+    <circle cx="21" cy="7" r="2" fill="#00C389" className="cnx-node-blink-1" />
+  </svg>
+);
+
+export const ConstraintShieldIcon: React.FC<{ ok?: boolean; size?: number; className?: string }> = ({
+  ok = true,
+  size = 20,
+  className = '',
+}) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={`promax-svg-icon ${className}`}
+    aria-hidden="true"
+  >
+    <path
+      d="M12 3L4.5 6.2V11.6C4.5 16.5 7.7 20.6 12 22C16.3 20.6 19.5 16.5 19.5 11.6V6.2L12 3Z"
+      fill={ok ? '#00C389' : '#F59E0B'}
+      fillOpacity="0.18"
+      stroke={ok ? '#25E2CC' : '#F59E0B'}
+      strokeWidth="1.7"
+      strokeLinejoin="round"
+    />
+    {ok ? (
+      <path
+        d="M8.8 12.2L11 14.4L15.4 9.8"
+        stroke="#00C389"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="cnx-float-icon"
+      />
+    ) : (
+      <path
+        d="M12 8.2V12.8M12 15.8H12.01"
+        stroke="#F59E0B"
+        strokeWidth="2"
+        strokeLinecap="round"
+        className="cnx-node-blink-1"
+      />
+    )}
+  </svg>
+);

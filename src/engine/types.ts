@@ -250,3 +250,148 @@ export interface ParsedDataset {
 
 export type OtpChannel = 'outlook' | 'teams' | 'both';
 
+// ============================================================================
+// Tab 4: WFM Agent Shift Scheduling, Exceptions & 15-Min Break Optimizer Types
+// ============================================================================
+
+export type LeaveAllocationCode =
+  | 'WORK'
+  | 'OFF'
+  | 'AL'
+  | 'MAT'
+  | 'RES'
+  | 'TERM'
+  | 'UPL'
+  | 'PAT';
+
+export type ExceptionCode = Exclude<LeaveAllocationCode, 'WORK' | 'OFF'>;
+
+export interface LeaveCounts {
+  annual: number;
+  maternity: number;
+  resignations: number;
+  termination: number;
+  upl: number;
+  paternity: number;
+}
+
+export type RosterInputMode = 'headcount' | 'named';
+
+export interface RosterAgentInput {
+  id: string;
+  name: string;
+  lockedException?: ExceptionCode | null;
+}
+
+export interface ShiftTemplate {
+  id: string;
+  label: string;
+  startMin: number; // 0..1439
+  durationMin: number; // e.g. 540 for 9h gross shift
+  endMinOfDay: number; // (startMin + durationMin) % 1440
+  wrapsMidnight: boolean;
+  enabled: boolean;
+}
+
+export interface BreakPlacementRules {
+  firstBreakMin: number; // default 15
+  lunchMin: number; // default 30
+  lastBreakMin: number; // default 15
+  maxContinuousLoginMin: number; // default 210 (3h 30m)
+  minGapBetweenBreaksMin: number; // default 60 (1h)
+  edgeBufferMin: number; // default 60
+}
+
+export interface BreakAssignment {
+  firstBreakOffsetMin: number;
+  lunchOffsetMin: number;
+  lastBreakOffsetMin: number;
+  firstBreakLabel: string;
+  lunchLabel: string;
+  lastBreakLabel: string;
+  maxContinuousWorkMin: number;
+  minInterBreakGapMin: number;
+  isValid: boolean;
+}
+
+export interface SchedulingRules {
+  maxWorkdaysPerWeek: number; // 5
+  allowSunMonSplitOff: boolean; // true (Sun + Mon split wrap allowed)
+  maxWeeklyStartDriftHours: number; // default 2h (08+09 OK, 10+12 OK, 15+08 blocked)
+  minInterShiftRestHours: number; // default 12h (blocks clopening)
+  annualVisibilityInOutput: 'exclude' | 'show_muted'; // AL input excluded from output by default
+  breakRules: BreakPlacementRules;
+}
+
+export interface AgentDayAssignment {
+  dayKey: DayKey;
+  status: LeaveAllocationCode;
+  shiftId: string | null;
+  breaks: BreakAssignment | null;
+  isManualOverride?: boolean;
+}
+
+export interface ScheduledAgentRow {
+  agentId: string;
+  agentName: string;
+  source: 'manual_count' | 'uploaded_name';
+  preAllocatedException: ExceptionCode | null;
+  offPatternLabel: string;
+  assignments: Record<DayKey, AgentDayAssignment>;
+  workDaysCount: number;
+  offDaysCount: number;
+  shiftBandSpanHours: number;
+  minRestHoursObserved: number | null;
+  violations: string[];
+}
+
+export interface IntervalCoverageCell {
+  dayKey: DayKey;
+  dateIso: string;
+  slotIndex: number;
+  timeLabel: string;
+  forecastVolume: number;
+  requiredSeats: number;
+  scheduledGrossHeads: number;
+  onBreakFte: number;
+  effectiveScheduledFte: number;
+  varianceFte: number;
+  projectedSlPct: number;
+}
+
+export interface DailyCoverageSummary {
+  dayKey: DayKey;
+  dateIso: string;
+  forecastVolume: number;
+  requiredProdHours: number;
+  scheduledGrossHours: number;
+  scheduledNetHours: number;
+  coveragePct: number;
+  peakRequired: number;
+  peakScheduledNet: number;
+  understaffedIntervals: number;
+  avgProjectedSlPct: number;
+}
+
+export interface ScheduleGenerationResult {
+  agents: ScheduledAgentRow[];
+  visibleOutputAgents: ScheduledAgentRow[];
+  coverageByDay: Record<DayKey, IntervalCoverageCell[]>;
+  dailyTotals: DailyCoverageSummary[];
+  summary: {
+    totalRosterInput: number;
+    annualExcluded: number;
+    fullWeekExceptionsCount: number;
+    activeSchedulableCount: number;
+    totalWorkShifts: number;
+    totalRequiredProdHours: number;
+    totalScheduledNetHours: number;
+    avgCoveragePct: number;
+    understaffedIntervalsTotal: number;
+    overstaffedIntervalsTotal: number;
+    projectedWeeklySlPct: number;
+    violationAgentsCount: number;
+    validBreakRatePct: number;
+  };
+}
+

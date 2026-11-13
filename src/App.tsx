@@ -12,6 +12,7 @@ import {
   ForecastStudioIcon,
   ErlangQueueIcon,
   CapacityWaterfallIcon,
+  ShiftSchedulerIcon,
 } from './components/ProMaxIcons.tsx';
 import type {
   CapacityConfig,
@@ -22,7 +23,13 @@ import type {
   HistoricalPoint,
   IntervalGranularityMin,
   IntervalRowInput,
+  LeaveCounts,
   ParsedDataset,
+  RosterAgentInput,
+  RosterInputMode,
+  ScheduledAgentRow,
+  SchedulingRules,
+  ShiftTemplate,
 } from './engine/types.ts';
 import {
   buildDateSpecificCurve,
@@ -39,13 +46,24 @@ import {
 } from './engine/forecasting.ts';
 import { runErlangPlanner, solveRequiredAgents } from './engine/erlang.ts';
 import { buildWhatIfMatrix, calculateCapacityWaterfall } from './engine/capacity.ts';
-import { exportFullSuiteWorkbook, exportHorizonForecastXlsx } from './engine/exporter.ts';
+import {
+  DEFAULT_SCHEDULING_RULES,
+  DEFAULT_SHIFT_CATALOG,
+  generateWeeklySchedule,
+  recalculateScheduleCoverage,
+} from './engine/scheduling.ts';
+import {
+  exportFullSuiteWorkbook,
+  exportHorizonForecastXlsx,
+  exportSchedulingWorkbook,
+} from './engine/exporter.ts';
 import { PrintReportHeader } from './components/PrintReportHeader.tsx';
 import { Tab1Forecasting } from './components/Tab1Forecasting.tsx';
 import { Tab2Erlang, type IntervalPlanScope, type HorizonDaySpec } from './components/Tab2Erlang.tsx';
 import { Tab3Capacity } from './components/Tab3Capacity.tsx';
+import { Tab4Scheduling } from './components/Tab4Scheduling.tsx';
 
-type ActiveTab = 'tab1' | 'tab2' | 'tab3';
+type ActiveTab = 'tab1' | 'tab2' | 'tab3' | 'tab4';
 
 const SHRINKAGE_DELTAS = [-4, -2, 0, 2, 4];
 const AHT_DELTAS = [-20, -10, 0, 10, 20];
@@ -164,7 +182,7 @@ export const App: React.FC = () => {
   const [customHorizonDays, setCustomHorizonDays] = useState<number>(10);
 
   // Build Historical & 60-Day Future Horizon Day Specs (aligned to Monday start)
-  const { historyDays, futureDays } = useMemo(() => {
+  const { historyDays, futureDays, nextWeekDays } = useMemo(() => {
     const histList: HorizonDaySpec[] = history.map((pt, idx) => {
       const parsed = new Date(pt.label.length <= 10 ? `${pt.label}T00:00:00` : pt.label);
       const dk: DayKey = !Number.isNaN(parsed.getTime())
@@ -196,7 +214,11 @@ export const App: React.FC = () => {
       sourceLabel: 'Forecast',
     }));
 
-    return { historyDays: histList, futureDays: futList };
+    return {
+      historyDays: histList,
+      futureDays: futList,
+      nextWeekDays: futSummary.nextWeekDays,
+    };
   }, [history, forecastOutput, selectedModelId, forecastConfig, dowShares]);
 
   // Live Monthly Cap Plan Erlang C calculation (Monthly -> Daily -> Hourly -> Erlang Required/Hr -> Required/Day)
@@ -276,6 +298,81 @@ export const App: React.FC = () => {
       ),
     [intervals, erlangConfig, capacityConfig]
   );
+
+  // Tab 4 State: Agent Shift Scheduling & Break Optimization
+  const [schedInputMode, setSchedInputMode] = useState<RosterInputMode>('headcount');
+  const [schedHeadcount, setSchedHeadcount] = useState<number>(79);
+  const [schedNamedAgents, setSchedNamedAgents] = useState<RosterAgentInput[]>([]);
+  const [schedLeaveCounts, setSchedLeaveCounts] = useState<LeaveCounts>({
+    annual: 0,
+    maternity: 0,
+    resignations: 0,
+    termination: 0,
+    upl: 0,
+    paternity: 0,
+  });
+  const [schedShiftCatalog, setSchedShiftCatalog] = useState<ShiftTemplate[]>(
+    () => DEFAULT_SHIFT_CATALOG
+  );
+  const [schedRules, setSchedRules] = useState<SchedulingRules>(() => ({
+    ...DEFAULT_SCHEDULING_RULES,
+  }));
+  const [customRosterAgents, setCustomRosterAgents] = useState<ScheduledAgentRow[] | null>(null);
+
+  useEffect(() => {
+    setCustomRosterAgents(null);
+  }, [
+    schedInputMode,
+    schedHeadcount,
+    schedNamedAgents,
+    schedLeaveCounts,
+    schedShiftCatalog,
+    schedRules.maxWorkdaysPerWeek,
+    schedRules.allowSunMonSplitOff,
+    schedRules.maxWeeklyStartDriftHours,
+    schedRules.minInterShiftRestHours,
+    schedRules.breakRules.firstBreakMin,
+    schedRules.breakRules.lunchMin,
+    schedRules.breakRules.lastBreakMin,
+    schedRules.breakRules.maxContinuousLoginMin,
+    schedRules.breakRules.minGapBetweenBreaksMin,
+    schedRules.breakRules.edgeBufferMin,
+  ]);
+
+  const scheduleResult = useMemo(() => {
+    if (customRosterAgents && customRosterAgents.length > 0) {
+      return recalculateScheduleCoverage({
+        agents: customRosterAgents,
+        shiftCatalog: schedShiftCatalog,
+        rules: schedRules,
+        nextWeekDays,
+        dayCurves,
+        erlangConfig,
+      });
+    }
+    return generateWeeklySchedule({
+      inputMode: schedInputMode,
+      headcountInput: schedHeadcount,
+      namedAgents: schedNamedAgents,
+      leaveCounts: schedLeaveCounts,
+      shiftCatalog: schedShiftCatalog,
+      rules: schedRules,
+      nextWeekDays,
+      dayCurves,
+      erlangConfig,
+    });
+  }, [
+    customRosterAgents,
+    schedInputMode,
+    schedHeadcount,
+    schedNamedAgents,
+    schedLeaveCounts,
+    schedShiftCatalog,
+    schedRules,
+    nextWeekDays,
+    dayCurves,
+    erlangConfig,
+  ]);
 
   // Handlers
   const handleDatasetImported = (dataset: ParsedDataset) => {
@@ -532,6 +629,30 @@ export const App: React.FC = () => {
     );
   };
 
+  const handleAutoGenerateSchedule = () => {
+    setCustomRosterAgents(null);
+    showNotice(
+      'Generated optimal weekly Mon–Sun Shift & Break Roster aligned with Next Week Forecast & Erlang demand.'
+    );
+  };
+
+  const handleExportScheduleExcel = async () => {
+    try {
+      showNotice('Building Styled 3-Sheet Shift & Break Roster Workbook (.xlsx)...');
+      await exportSchedulingWorkbook({
+        scheduleResult,
+        shiftCatalog: schedShiftCatalog,
+        rules: schedRules,
+        erlangConfig,
+      });
+      showNotice('Downloaded Styled Shift & Break Roster Workbook (.xlsx)!');
+    } catch (err) {
+      showNotice(
+        `Schedule export failed: ${err instanceof Error ? err.message : 'Unable to generate workbook.'}`
+      );
+    }
+  };
+
   const handleExportExcel = async () => {
     try {
       showNotice('Building 8-Sheet Executive Dashboard Workbook (.xlsx)...');
@@ -584,7 +705,7 @@ export const App: React.FC = () => {
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                12 Statistical Forecast Models · Pure ErlangXL97 (=Agents &amp; =FractionalAgents) · Monthly &amp; Daily Cap Plan
+                12 Statistical Forecast Models · Pure ErlangXL97 (=Agents &amp; =FractionalAgents) · Cap Plan &amp; Shift Roster
               </p>
             </div>
           </div>
@@ -624,11 +745,13 @@ export const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleExportExcel}
+              onClick={activeTab === 'tab4' ? handleExportScheduleExcel : handleExportExcel}
               className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-xs transition cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Export .xlsx</span>
+              <span className="hidden sm:inline">
+                {activeTab === 'tab4' ? 'Export Roster .xlsx' : 'Export .xlsx'}
+              </span>
             </button>
 
             <button
@@ -662,19 +785,19 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* 3-Tab Navigation Bar */}
-        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 flex items-center gap-2 overflow-x-auto border-t border-slate-100 dark:border-slate-800/80">
+        {/* 4-Tab Navigation Bar */}
+        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-8 2xl:px-12 flex items-center gap-1 overflow-x-auto border-t border-slate-100 dark:border-slate-800/80">
           <button
             type="button"
             onClick={() => setActiveTab('tab1')}
-            className={`flex items-center gap-2.5 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
+            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
               activeTab === 'tab1'
                 ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            <ForecastStudioIcon size={20} />
-            1. Forecasting Studio &amp; Future Horizons (Mon → Sun)
+            <ForecastStudioIcon size={18} />
+            1. Forecasting &amp; Horizons (Mon→Sun)
             <span className="rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 px-1.5 py-0.5 text-[10px] font-mono">
               12 Models
             </span>
@@ -683,14 +806,14 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveTab('tab2')}
-            className={`flex items-center gap-2.5 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
+            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
               activeTab === 'tab2'
                 ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            <ErlangQueueIcon size={20} />
-            2. Interval &amp; Erlang C/A Planner (=Agents / =FractionalAgents)
+            <ErlangQueueIcon size={18} />
+            2. Interval &amp; Erlang C/A Planner
             <span className="rounded-md bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono">
               {erlangSummary.totalProductiveHours.toFixed(1)}h
             </span>
@@ -699,16 +822,32 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveTab('tab3')}
-            className={`flex items-center gap-2.5 px-4 py-3 text-xs font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
+            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
               activeTab === 'tab3'
                 ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-500/5'
                 : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
             }`}
           >
-            <CapacityWaterfallIcon size={20} />
-            3. Monthly Cap Plan &amp; Shrinkage Waterfall
+            <CapacityWaterfallIcon size={18} />
+            3. Cap Plan &amp; Shrinkage Waterfall
             <span className="rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 text-[10px] font-mono">
               {Math.round(capacityResult.finalGrossFte)} Agents
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('tab4')}
+            className={`flex items-center gap-2 px-3 py-2.5 text-[11.5px] font-bold border-b-2 transition whitespace-nowrap cursor-pointer ${
+              activeTab === 'tab4'
+                ? 'border-amber-500 text-amber-600 dark:text-amber-400 bg-amber-500/5'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <ShiftSchedulerIcon size={18} />
+            4. Shift &amp; Break Roster Studio
+            <span className="rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 text-[10px] font-mono">
+              {scheduleResult.summary.activeSchedulableCount} Active · {scheduleResult.summary.avgCoveragePct.toFixed(0)}% Cov
             </span>
           </button>
         </div>
@@ -813,6 +952,32 @@ export const App: React.FC = () => {
             slTargetPct={erlangConfig.slTargetPct}
             slThresholdSec={erlangConfig.slThresholdSec}
             onExportExcel={handleExportExcel}
+          />
+        )}
+
+        {activeTab === 'tab4' && (
+          <Tab4Scheduling
+            inputMode={schedInputMode}
+            setInputMode={setSchedInputMode}
+            headcountInput={schedHeadcount}
+            setHeadcountInput={setSchedHeadcount}
+            namedAgents={schedNamedAgents}
+            setNamedAgents={setSchedNamedAgents}
+            leaveCounts={schedLeaveCounts}
+            setLeaveCounts={setSchedLeaveCounts}
+            shiftCatalog={schedShiftCatalog}
+            setShiftCatalog={setSchedShiftCatalog}
+            rules={schedRules}
+            setRules={setSchedRules}
+            scheduleResult={scheduleResult}
+            onAutoGenerate={handleAutoGenerateSchedule}
+            onUpdateRosterAgents={setCustomRosterAgents}
+            onExportScheduleExcel={handleExportScheduleExcel}
+            nextWeekDays={nextWeekDays}
+            capPlanFteTarget={capacityResult.finalGrossFte}
+            erlangConfig={erlangConfig}
+            grossShiftHoursCapPlan={capacityConfig.grossShiftHours}
+            onShowNotice={showNotice}
           />
         )}
       </main>
