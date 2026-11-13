@@ -293,7 +293,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
           <div className="mt-0.5 text-[11px] text-slate-400">Σ (Volume × AHT) ÷ 3,600</div>
         </div>
 
-        <div className="card-elevated rounded-xl border-2 border-sky-500/40 bg-sky-500/5 dark:bg-sky-950/30 p-3.5 shadow-xs">
+        <div className="card-elevated kpi-hero-accent rounded-xl border-2 border-sky-500/40 bg-sky-500/5 dark:bg-sky-950/30 p-3.5 shadow-xs">
           <div className="text-[11px] font-bold text-sky-600 dark:text-sky-400">
             Required Productive Hours
           </div>
@@ -353,7 +353,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
           MONTHLY -> DAILY -> HOURLY VOLUME BREAKDOWN CARD
           ("التقسيمة والتنفيطة للفوليوم زي الشيت")
           ===================================================================== */}
-      <div className="bento-card-promax card-elevated rounded-2xl border-2 border-indigo-500/30 bg-gradient-to-r from-indigo-500/10 via-white to-emerald-500/5 dark:from-indigo-950/40 dark:via-slate-900 dark:to-emerald-950/20 p-5 shadow-xs">
+      <div className="bento-card-promax rounded-2xl border-2 border-indigo-500/30 bg-gradient-to-r from-indigo-500/10 via-white to-emerald-500/5 dark:from-indigo-950/40 dark:via-slate-900 dark:to-emerald-950/20 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="flex items-start gap-3">
             <ProMaxIconBadge tone="violet" size="lg" pulse>
@@ -473,7 +473,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             </div>
           </div>
 
-          <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-3">
+          <div className="card-elevated rounded-xl border border-sky-500/30 bg-sky-500/10 p-3">
             <div className="text-[10px] uppercase font-bold text-sky-600 dark:text-sky-300">
               6. Required / Hour
             </div>
@@ -486,7 +486,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
             </div>
           </div>
 
-          <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3">
+          <div className="card-elevated kpi-hero-accent rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3">
             <div className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-300">
               7. Required / Day
             </div>
@@ -504,7 +504,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
       {/* =====================================================================
           SIMPLIFIED ERLANG C CONFIG + AGENTS VS FRACTIONAL AGENTS TOGGLE
           ===================================================================== */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
+      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-start gap-3">
             <div className="icon-badge-glow w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-sky-600/20">
@@ -894,7 +894,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
       </div>
 
       {/* Intraday Staffing Curve Chart */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
+      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
           <div>
             <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -919,7 +919,7 @@ export const Tab2Erlang: React.FC<Tab2Props> = ({
       </div>
 
       {/* Detailed Interval Schedule Table showing BOTH Integer Agents & Fractional Agents + Multi-Day Horizon & Export */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
+      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-3">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>

@@ -705,7 +705,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Card 1: Next Week Forecast (7 Days) */}
-          <div className="bento-card-promax card-elevated rounded-2xl border-2 border-sky-500/35 bg-gradient-to-b from-sky-500/10 via-white to-white dark:from-sky-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
+          <div className="card-elevated kpi-hero-accent rounded-2xl border-2 border-sky-500/35 bg-gradient-to-b from-sky-500/10 via-white to-white dark:from-sky-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/15 px-2.5 py-1 text-xs font-bold text-sky-600 dark:text-sky-400">
@@ -772,7 +772,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                           setInspectMode('specific_date');
                           setSelectedInspectDate(d.dateIso);
                         }}
-                        className={`rounded-lg p-1.5 text-center border transition cursor-pointer ${
+                        className={`cnx-pill-interactive rounded-lg p-1.5 text-center border cursor-pointer ${
                           isSelectedDay
                             ? 'border-sky-500 bg-sky-500/15 ring-2 ring-sky-500'
                             : isPeak
@@ -875,7 +875,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           </div>
 
           {/* Card 2: Current Month Forecast (Days 1–30) */}
-          <div className="card-elevated rounded-2xl border-2 border-emerald-500/35 bg-gradient-to-b from-emerald-500/10 via-white to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
+          <div className="card-elevated kpi-hero-accent rounded-2xl border-2 border-emerald-500/35 bg-gradient-to-b from-emerald-500/10 via-white to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-xs font-bold text-emerald-600 dark:text-emerald-400">
@@ -950,7 +950,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           </div>
 
           {/* Card 3: Next Month Forecast (Days 31–60) */}
-          <div className="card-elevated rounded-2xl border-2 border-indigo-500/35 bg-gradient-to-b from-indigo-500/10 via-white to-white dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
+          <div className="card-elevated kpi-hero-accent rounded-2xl border-2 border-indigo-500/35 bg-gradient-to-b from-indigo-500/10 via-white to-white dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500/15 px-2.5 py-1 text-xs font-bold text-indigo-600 dark:text-indigo-400">
@@ -1037,7 +1037,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
           INTERACTIVE DATE & DAY ARRIVAL PATTERN INSPECTOR
           ("اختار يوم معين يطلعلي الداتا بتاعته و Arrival Pattern")
           ===================================================================== */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
+      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-start gap-3">
             <div className="icon-badge-glow w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
@@ -1141,7 +1141,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
             </div>
 
             <div className="grid grid-cols-2 gap-2.5">
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3">
+              <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3">
                 <div className="text-[10px] uppercase font-semibold text-slate-400">
                   Day Call Volume
                 </div>
@@ -1149,7 +1149,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
                   {inspectedProfile.volume.toLocaleString()}
                 </div>
               </div>
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3">
+              <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-3">
                 <div className="text-[10px] uppercase font-semibold text-slate-400">
                   Peak Interval
                 </div>
@@ -1183,7 +1183,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
       {/* =====================================================================
           ALL 12 STATISTICAL FORECASTING MODELS LEADERBOARD & TRAJECTORY
           ===================================================================== */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
+      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
         <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -1316,7 +1316,7 @@ export const Tab1Forecasting: React.FC<Tab1Props> = ({
       </div>
 
       {/* Collapsible Outlier & Holiday Cleaner */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-xs">
+      <div className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">

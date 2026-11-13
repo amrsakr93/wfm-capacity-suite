@@ -185,7 +185,7 @@ export const Tab3Capacity: React.FC<Props> = ({
   return (
     <div className="space-y-6 animate-slide-up">
       {/* Executive Monthly Cap Plan Step-by-Step Sheet ("التقسيمة والتنفيطة الشهرية") */}
-      <div className="bento-card-promax card-elevated rounded-2xl border-2 border-emerald-500/35 bg-gradient-to-r from-emerald-500/10 via-white to-sky-500/5 dark:from-emerald-950/35 dark:via-slate-900 dark:to-sky-950/20 p-5 shadow-xs">
+      <div className="bento-card-promax rounded-2xl border-2 border-emerald-500/35 bg-gradient-to-r from-emerald-500/10 via-white to-sky-500/5 dark:from-emerald-950/35 dark:via-slate-900 dark:to-sky-950/20 p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 border-b border-slate-200/80 dark:border-slate-800">
           <div className="flex items-start gap-3">
             <ProMaxIconBadge tone="emerald" size="lg" pulse>
@@ -469,7 +469,7 @@ export const Tab3Capacity: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="rounded-xl border-2 border-emerald-500 bg-emerald-500/15 p-2.5">
+          <div className="card-elevated kpi-hero-accent rounded-xl border-2 border-emerald-500 bg-emerald-500/15 p-2.5">
             <div className="flex items-center justify-between text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-300">
               <span>Agents Required [A]</span>
               <span className="inline-flex items-center gap-1">
@@ -496,7 +496,7 @@ export const Tab3Capacity: React.FC<Props> = ({
 
       {/* Executive Gross Headcount Banner */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
           <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
             Base Productive Hours / Day
           </div>
@@ -508,7 +508,7 @@ export const Tab3Capacity: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
           <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
             Paid / Login Shift Length
           </div>
@@ -520,7 +520,7 @@ export const Tab3Capacity: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
           <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
             Compound Total Shrinkage
           </div>
@@ -532,7 +532,7 @@ export const Tab3Capacity: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
           <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
             Daily Productive Seats
           </div>
@@ -544,7 +544,7 @@ export const Tab3Capacity: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
+        <div className="card-elevated rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
           <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
             Scheduled Seats (Post Inflex)
           </div>
@@ -556,7 +556,7 @@ export const Tab3Capacity: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 dark:bg-emerald-950/30 p-3.5">
+        <div className="card-elevated kpi-hero-accent rounded-xl border border-emerald-500/40 bg-emerald-500/10 dark:bg-emerald-950/30 p-3.5">
           <div className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
             Final Gross Headcount (FTE)
           </div>
@@ -573,7 +573,7 @@ export const Tab3Capacity: React.FC<Props> = ({
       </div>
 
       {/* Route & Shift Configuration */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
+      <div className="bento-card-promax rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3.5">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
@@ -1004,7 +1004,7 @@ export const Tab3Capacity: React.FC<Props> = ({
       {/* FTE Waterfall Bridge + What-If Sensitivity Matrix */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* FTE Waterfall Visual Bridge */}
-        <div className="lg:col-span-6 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
+        <div className="bento-card-promax lg:col-span-6 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
@@ -1087,7 +1087,7 @@ export const Tab3Capacity: React.FC<Props> = ({
         </div>
 
         {/* 2D What-If Sensitivity Matrix */}
-        <div className="lg:col-span-6 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
+        <div className="bento-card-promax lg:col-span-6 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xs space-y-4">
           <div>
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <Grid className="w-4 h-4 text-sky-500" />
