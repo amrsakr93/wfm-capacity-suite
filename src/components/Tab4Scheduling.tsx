@@ -40,7 +40,6 @@ import {
   WEEK_DAYS,
   assignOptimalBreaksForShift,
   buildBreakAssignment,
-  computeCircularStartSpanHours,
   formatMinutesHHMM,
   isOvernightShiftWindow,
   parseAgentRosterFile,
@@ -601,18 +600,10 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
       ...agent,
       assignments: nextAssignments,
     };
-    const starts: number[] = [];
-    for (const dk of WEEK_DAYS) {
-      const a = tempRow.assignments[dk];
-      if (a.status === 'WORK' && a.shiftId) {
-        const s = shiftMap.get(a.shiftId);
-        if (s) starts.push(s.startMin);
-      }
-    }
-    const span = computeCircularStartSpanHours(starts);
     const audited = validateAgentScheduleRow(tempRow, shiftCatalog, rules);
+    const span = audited.shiftBandSpanHours;
     const hasRestAlert = audited.violations.some((v) => v.includes('rest') || v.includes('clopening'));
-    const hasDriftAlert = span > rules.maxWeeklyStartDriftHours + 1e-6;
+    const hasDriftAlert = audited.violations.some((v) => v.includes('drift'));
     return {
       ok: !hasRestAlert && !hasDriftAlert,
       span,

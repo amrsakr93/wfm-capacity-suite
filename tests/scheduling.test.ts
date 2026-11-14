@@ -784,4 +784,127 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
       assert.equal(row.byDay.Thu, monThuPins[row.shiftId]);
     }
   });
+
+  it('reconciles full-week explicit manual matrix edits on 58 active agents (290 shifts) with zero WFM rule violations', () => {
+    const catalog8 = parseShiftCatalogText(
+      [
+        '00:00-09:00',
+        '07:00-16:00',
+        '08:00-17:00',
+        '09:00-18:00',
+        '10:00-19:00',
+        '12:00-21:00',
+        '13:00-22:00',
+        '15:00-00:00',
+      ].join('\n')
+    );
+    const pins: Record<string, number> = {
+      '00:00-09:00': 1,
+      '07:00-16:00': 4,
+      '08:00-17:00': 15,
+      '09:00-18:00': 12,
+      '10:00-19:00': 7,
+      '12:00-21:00': 5,
+      '13:00-22:00': 5,
+      '15:00-00:00': 4,
+    };
+    const orangeOverrides: Record<string, Partial<Record<DayKey, number>>> = {
+      '00:00-09:00': { Tue: 1, Wed: 1, Fri: 1, Sat: 1, Sun: 1 },
+      '07:00-16:00': { Fri: 4, Sat: 2, Sun: 2 },
+      '08:00-17:00': { Tue: 14, Wed: 14, Thu: 14, Fri: 12, Sat: 5, Sun: 5 },
+      '09:00-18:00': { Mon: 11, Tue: 11, Wed: 11, Thu: 11, Fri: 10, Sat: 5, Sun: 5 },
+      '10:00-19:00': { Mon: 6, Tue: 6, Wed: 6, Thu: 6, Fri: 4, Sat: 3, Sun: 3 },
+      '12:00-21:00': { Fri: 4, Sat: 2, Sun: 2 },
+      '13:00-22:00': { Mon: 5, Tue: 5, Wed: 5, Thu: 5, Fri: 3, Sat: 3, Sun: 3 },
+      '15:00-00:00': { Fri: 3, Sat: 3, Sun: 3 },
+    };
+
+    const res = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 66,
+      namedAgents: [],
+      leaveCounts: { annual: 6, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: catalog8,
+      rules: {
+        ...DEFAULT_SCHEDULING_RULES,
+        shiftHeadcountOverrides: pins,
+        shiftDayHeadcountOverrides: orangeOverrides,
+      },
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    assert.equal(res.summary.activeSchedulableCount, 58);
+    assert.equal(res.summary.totalWorkShifts, 290);
+    assert.equal(res.summary.violationAgentsCount, 0);
+
+    const activeAgents = res.agents.filter((ag) => ag.preAllocatedException === null);
+    assert.equal(activeAgents.length, 58);
+    for (const ag of activeAgents) {
+      assert.equal(ag.workDaysCount, 5, `${ag.agentName} workDaysCount`);
+      assert.equal(ag.offDaysCount, 2, `${ag.agentName} offDaysCount`);
+      assert.equal(ag.violations.length, 0, `${ag.agentName} violations: ${ag.violations.join('; ')}`);
+    }
+
+    for (const row of res.shiftDailyMix) {
+      const expDays = orangeOverrides[row.shiftId] ?? {};
+      for (const [dk, expectedVal] of Object.entries(expDays)) {
+        assert.equal(row.byDay[dk as DayKey], expectedVal, `explicit ${row.shiftId} ${dk}`);
+      }
+    }
+  });
+
+  it('produces break-aware peak-centered bell-curve Auto distribution on 8-shift 58-agent roster with no weekend collapse', () => {
+    const catalog8 = parseShiftCatalogText(
+      [
+        '00:00-09:00',
+        '07:00-16:00',
+        '08:00-17:00',
+        '09:00-18:00',
+        '10:00-19:00',
+        '12:00-21:00',
+        '13:00-22:00',
+        '15:00-00:00',
+      ].join('\n')
+    );
+    const res = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 66,
+      namedAgents: [],
+      leaveCounts: { annual: 6, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: catalog8,
+      rules: DEFAULT_SCHEDULING_RULES,
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    assert.equal(res.summary.activeSchedulableCount, 58);
+    assert.equal(res.summary.totalWorkShifts, 290);
+    assert.equal(res.summary.violationAgentsCount, 0);
+    assert.equal(res.summary.validBreakRatePct, 100);
+
+    const byId = new Map(res.shiftDailyMix.map((r) => [r.shiftId, r]));
+    const weeklyShifts = (id: string) => {
+      const b = byId.get(id)!.byDay;
+      return b.Mon + b.Tue + b.Wed + b.Thu + b.Fri + b.Sat + b.Sun;
+    };
+    const coreMorning08 = weeklyShifts('08:00-17:00');
+    const coreMorning09 = weeklyShifts('09:00-18:00');
+    const edgeEarly07 = weeklyShifts('07:00-16:00');
+    const edgeLate15 = weeklyShifts('15:00-00:00');
+    assert.ok(coreMorning08 > edgeEarly07 && coreMorning08 > edgeLate15, `08:00 (${coreMorning08}) should exceed edges (${edgeEarly07}, ${edgeLate15})`);
+    assert.ok(coreMorning09 > edgeEarly07 && coreMorning09 > edgeLate15, `09:00 (${coreMorning09}) should exceed edges (${edgeEarly07}, ${edgeLate15})`);
+    assert.ok(byId.get('13:00-22:00')!.assignedPoolCount >= 4, '13:00-22:00 should not be starved');
+
+    for (const id of ['07:00-16:00', '08:00-17:00', '09:00-18:00', '10:00-19:00', '12:00-21:00', '13:00-22:00', '15:00-00:00']) {
+      const b = byId.get(id)!.byDay;
+      assert.ok(b.Sat > 0 && b.Sun > 0, `${id} should not collapse on weekend (Sat=${b.Sat}, Sun=${b.Sun})`);
+    }
+    const wkdayAvg =
+      res.shiftDailyMix.reduce((s, r) => s + r.byDay.Mon + r.byDay.Tue + r.byDay.Wed + r.byDay.Thu + r.byDay.Fri, 0) / 5;
+    const wkndAvg = res.shiftDailyMix.reduce((s, r) => s + r.byDay.Sat + r.byDay.Sun, 0) / 2;
+    assert.ok(wkdayAvg >= wkndAvg, `weekday avg (${wkdayAvg}) >= weekend avg (${wkndAvg})`);
+  });
 });
