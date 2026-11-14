@@ -896,6 +896,13 @@ export function recalculateScheduleCoverage(params: {
 
   const overrides = rules.shiftHeadcountOverrides ?? {};
   const dayOverridesAll = rules.shiftDayHeadcountOverrides ?? {};
+  const enabledCatalogShifts = sortedCatalog.filter((s) => s.enabled);
+  const allEnabledPinned =
+    enabledCatalogShifts.length > 0 &&
+    enabledCatalogShifts.every((s) => {
+      const ov = overrides[s.id];
+      return ov !== undefined && ov !== null && Number.isFinite(ov);
+    });
   const shiftDailyMix: ShiftDailyMixRow[] = sortedCatalog
     .filter((sh) => {
       const counts = shiftDayCounts.get(sh.id);
@@ -919,29 +926,36 @@ export function recalculateScheduleCoverage(params: {
       };
       const totalWeeklyShifts = WEEK_DAYS.reduce((s, dk) => s + byDay[dk], 0);
       const ovVal = overrides[sh.id];
+      const hasFiniteOv = ovVal !== undefined && ovVal !== null && Number.isFinite(ovVal);
+      const cleanOvVal = hasFiniteOv ? Math.min(activeSchedulableCount, Math.max(0, Math.round(ovVal!))) : null;
       const shDayOv = dayOverridesAll[sh.id];
       const cleanDayOv: Partial<Record<DayKey, number | null>> = {};
       let hasAnyDayOv = false;
+      let dayOvCount = 0;
       if (shDayOv) {
         for (const dk of WEEK_DAYS) {
           const val = shDayOv[dk];
           if (val !== undefined && val !== null && Number.isFinite(val)) {
             cleanDayOv[dk] = Math.max(0, Math.round(val));
             hasAnyDayOv = true;
+            dayOvCount++;
           }
         }
       }
+      const hasAll7DayOv = dayOvCount === 7;
+      const assignedPoolCount = hasAll7DayOv
+        ? Math.min(activeSchedulableCount, Math.ceil(totalWeeklyShifts / Math.max(1, rules.maxWorkdaysPerWeek)))
+        : allEnabledPinned && cleanOvVal !== null
+          ? cleanOvVal
+          : (primaryPoolCountByShift.get(sh.id) ?? 0);
       return {
         shiftId: sh.id,
         shiftLabel: sh.label,
         wrapsMidnight: sh.wrapsMidnight,
         durationHours: Number((sh.durationMin / 60).toFixed(1)),
-        targetOverride:
-          ovVal !== undefined && ovVal !== null && Number.isFinite(ovVal)
-            ? Math.max(0, Math.round(ovVal))
-            : null,
+        targetOverride: cleanOvVal,
         dayOverrides: hasAnyDayOv ? cleanDayOv : undefined,
-        assignedPoolCount: primaryPoolCountByShift.get(sh.id) ?? 0,
+        assignedPoolCount,
         avgPerDay: Number((totalWeeklyShifts / 7).toFixed(1)),
         byDay,
         totalWeeklyShifts,
@@ -1014,18 +1028,25 @@ export function generateWeeklySchedule(params: {
   const shiftMap = new Map(catalogToUse.map((s) => [s.id, s]));
   const overrides = rules.shiftHeadcountOverrides ?? {};
   const dayOverridesRaw = rules.shiftDayHeadcountOverrides ?? {};
+  const explicitCellOverridesMap = new Map<string, Map<number, number>>();
   const dayOverridesMap = new Map<string, Map<number, number>>();
   for (const sh of catalogToUse) {
     const shOv = dayOverridesRaw[sh.id];
     if (!shOv) continue;
-    const m = new Map<number, number>();
+    const explicitMap = new Map<number, number>();
+    const effectiveMap = new Map<number, number>();
     for (let dIdx = 0; dIdx < 7; dIdx++) {
       const val = shOv[WEEK_DAYS[dIdx]];
       if (val !== undefined && val !== null && Number.isFinite(val)) {
-        m.set(dIdx, Math.max(0, Math.round(val)));
+        const cleanVal = Math.max(0, Math.round(val));
+        explicitMap.set(dIdx, cleanVal);
+        effectiveMap.set(dIdx, cleanVal);
       }
     }
-    if (m.size > 0) dayOverridesMap.set(sh.id, m);
+    if (explicitMap.size > 0) {
+      explicitCellOverridesMap.set(sh.id, explicitMap);
+      dayOverridesMap.set(sh.id, effectiveMap);
+    }
   }
 
   // 1. Build base agent list from mode
@@ -1134,7 +1155,8 @@ export function generateWeeklySchedule(params: {
 
   const pinnedPoolShiftByRosterIdx = new Map<number, ShiftTemplate>();
   let pinCursor = 0;
-  const pinnedGroups: { shift: ShiftTemplate; rosterIndices: number[] }[] = [];
+  const pinnedGroups: { shift: ShiftTemplate; rosterIndices: number[]; basePin: number }[] = [];
+  const pinnedGroupByShiftId = new Map<string, { shift: ShiftTemplate; rosterIndices: number[]; basePin: number }>();
 
   for (const sh of catalogToUse) {
     const rawOv = overrides[sh.id];
@@ -1146,18 +1168,129 @@ export function generateWeeklySchedule(params: {
       pinnedPoolShiftByRosterIdx.set(rosterIdx, sh);
       groupIndices.push(rosterIdx);
     }
-    if (groupIndices.length > 0) pinnedGroups.push({ shift: sh, rosterIndices: groupIndices });
+    const entry = { shift: sh, rosterIndices: groupIndices, basePin: groupIndices.length };
+    pinnedGroupByShiftId.set(sh.id, entry);
+    if (groupIndices.length > 0) pinnedGroups.push(entry);
   }
 
-  const autoActiveIndices = activeIndices.filter((rIdx) => !pinnedPoolShiftByRosterIdx.has(rIdx));
+  let autoActiveIndices = activeIndices.filter((rIdx) => !pinnedPoolShiftByRosterIdx.has(rIdx));
 
   // Strict Overflow Rule:
   // A) If ANY shift is left on Auto, keep pinned shifts isolated & send remaining agents strictly to Auto shifts.
-  // B) If ALL non-zero shifts are pinned below active pool, spread overflow strictly across non-overnight shifts first.
+  // B) If ALL enabled shifts are pinned in top cards, top card pins lock Mon..Thu headcount (unless a Mon..Thu cell is explicitly overridden),
+  //    and remaining surplus active shifts are distributed across Fri..Sun by Erlang demand via relief OFF patterns!
   const autoAllowedShifts = catalogToUse.filter((sh) => {
     const ov = overrides[sh.id];
     return ov === undefined || ov === null;
   });
+  const allEnabledPinned = autoAllowedShifts.length === 0 && pinnedGroups.length > 0;
+
+  if (allEnabledPinned) {
+    for (const sh of catalogToUse) {
+      const basePin = pinnedGroupByShiftId.get(sh.id)?.basePin ?? 0;
+      let effMap = dayOverridesMap.get(sh.id);
+      if (!effMap) {
+        effMap = new Map<number, number>();
+        dayOverridesMap.set(sh.id, effMap);
+      }
+      if (basePin === 0) {
+        for (let dIdx = 0; dIdx < 7; dIdx++) {
+          if (!explicitCellOverridesMap.get(sh.id)?.has(dIdx)) {
+            effMap.set(dIdx, 0);
+          }
+        }
+      } else {
+        // Mon..Thu (dIdx 0..3) strictly honor the pinned shift counts unless individually cell-overridden
+        for (let dIdx = 0; dIdx < 4; dIdx++) {
+          if (!explicitCellOverridesMap.get(sh.id)?.has(dIdx)) {
+            effMap.set(dIdx, basePin);
+          }
+        }
+      }
+    }
+
+    // Absorb surplus active agents (beyond sum(Mon..Thu pins)) directly into non-overnight shift pools
+    // using Mon+Tue / Wed+Thu relief OFF patterns so Mon..Thu stays 100% locked at pinned counts
+    if (autoActiveIndices.length > 0) {
+      const wkndNeedByShift = new Map<string, number>();
+      for (const sh of catalogToUse) {
+        let need = 0;
+        for (const d of [4, 5, 6]) {
+          for (const pos of getShiftSlotsForDay(sh, d)) {
+            need += req15[pos.dayIdx][pos.qIdx];
+          }
+        }
+        wkndNeedByShift.set(sh.id, need);
+      }
+
+      const absorbReliefAgent = (group: { shift: ShiftTemplate; rosterIndices: number[]; basePin: number }) => {
+        const rosterIdx = autoActiveIndices.shift();
+        if (rosterIdx === undefined) return false;
+        pinnedPoolShiftByRosterIdx.set(rosterIdx, group.shift);
+        group.rosterIndices.push(rosterIdx);
+        if (!pinnedGroups.includes(group)) pinnedGroups.push(group);
+        return true;
+      };
+
+      // Pass 1: Cover shifts where explicit cell overrides require more weekly shifts than 5 * basePin
+      for (const sh of catalogToUse) {
+        if (autoActiveIndices.length === 0) break;
+        const group = pinnedGroupByShiftId.get(sh.id);
+        const expMap = explicitCellOverridesMap.get(sh.id);
+        if (!group || !expMap) continue;
+        let expSum = 0;
+        for (const v of expMap.values()) expSum += v;
+        if (expMap.size < 7 && group.basePin > 0) {
+          // Estimate minimum weekly demand if Fri..Sun partial explicit cells exceed 5*P - 4*P
+          const monThuSum = [0, 1, 2, 3].reduce(
+            (s, d) => s + (dayOverridesMap.get(sh.id)?.get(d) ?? group.basePin),
+            0
+          );
+          const wkndExpSum = [4, 5, 6].reduce((s, d) => s + (expMap.get(d) ?? 0), 0);
+          expSum = Math.max(expSum, monThuSum + wkndExpSum);
+        }
+        const neededPool = Math.ceil(expSum / Math.max(1, rules.maxWorkdaysPerWeek));
+        while (autoActiveIndices.length > 0 && group.rosterIndices.length < neededPool) {
+          absorbReliefAgent(group);
+        }
+      }
+
+      // Pass 2: Allocate remaining relief agents across non-overnight groups respecting explicit Fri/Sun ceilings
+      while (autoActiveIndices.length > 0) {
+        let bestGroup: { shift: ShiftTemplate; rosterIndices: number[]; basePin: number } | null = null;
+        let bestScore = -Infinity;
+
+        for (const strictCap of [true, false]) {
+          for (const nonOvernightOnly of [true, false]) {
+            for (const g of pinnedGroups) {
+              if (nonOvernightOnly && isOvernightShiftWindow(g.shift)) continue;
+              if (g.basePin <= 0) continue;
+              const currR = g.rosterIndices.length - g.basePin;
+              if (strictCap && currR >= g.basePin) continue;
+              if (strictCap) {
+                const expSun = explicitCellOverridesMap.get(g.shift.id)?.get(6);
+                const expFri = explicitCellOverridesMap.get(g.shift.id)?.get(4);
+                const expSat = explicitCellOverridesMap.get(g.shift.id)?.get(5);
+                if (expSun !== undefined && 2 * (currR + 1) > expSun) continue;
+                if (expFri !== undefined && 2 * (currR + 1) > expFri) continue;
+                if (expSat !== undefined && 2 * (currR + 1) > expSat) continue;
+              }
+              const need = wkndNeedByShift.get(g.shift.id) ?? 1;
+              const sc = need / Math.max(1, g.rosterIndices.length) - currR * 0.5;
+              if (sc > bestScore) {
+                bestScore = sc;
+                bestGroup = g;
+              }
+            }
+            if (bestGroup) break;
+          }
+          if (bestGroup) break;
+        }
+        if (!bestGroup || !absorbReliefAgent(bestGroup)) break;
+      }
+    }
+  }
+
   const nonZeroCatalog = catalogToUse.filter((sh) => overrides[sh.id] !== 0);
   const nonZeroDaytime = nonZeroCatalog.filter((sh) => !isOvernightShiftWindow(sh));
   const daytimeFallback = catalogToUse.filter((sh) => !isOvernightShiftWindow(sh));
@@ -1189,41 +1322,106 @@ export function generateWeeklySchedule(params: {
     const tgt = dayOverridesMap.get(shiftId)?.get(dIdx);
     if (tgt === undefined) return 0;
     const diff = Math.abs(count - tgt);
-    return diff * 450 + diff * diff * 180;
+    return diff * 6000 + diff * diff * 3000;
   };
 
   // 4A. Stratified OFF-Pattern Assignment for Each Pinned Shift Group
-  // Prevents all weekend OFFs clustering onto one shift (e.g., 4 agents getting [4,4,4,4,4,0,0])
+  // Prevents all weekend OFFs clustering onto one shift AND satisfies Mon..Thu pinned targets with exact relief OFF pairs/triples
   const offPairByRosterIdx = new Map<number, [number, number]>();
   const globalPinnedWorkByDay = new Array<number>(7).fill(0);
 
   for (const group of pinnedGroups) {
-    const { shift: sh, rosterIndices } = group;
-    const P = rosterIndices.length;
+    const { shift: sh, rosterIndices, basePin } = group;
+    const M = rosterIndices.length;
+    const r = Math.max(0, M - basePin);
     const shDayOv = dayOverridesMap.get(sh.id);
+    const expDayOv = explicitCellOverridesMap.get(sh.id);
     const shDayNeed = WEEK_DAYS.map((_, d) =>
       getShiftSlotsForDay(sh, d).reduce((s, pos) => s + req15[pos.dayIdx][pos.qIdx], 0)
     );
+
+    const hasExactMonThuTargets =
+      allEnabledPinned &&
+      r <= basePin &&
+      [0, 1, 2, 3].every((d) => (shDayOv?.get(d) ?? basePin) === basePin);
+
+    if (hasExactMonThuTargets && M > 0) {
+      const sunOv = expDayOv?.get(6);
+      const friOv = expDayOv?.get(4);
+      const satOv = expDayOv?.get(5);
+
+      let maxT = rules.allowSunMonSplitOff ? Math.min(r, Math.max(0, basePin - r)) : 0;
+      if (sunOv !== undefined) maxT = Math.min(maxT, Math.max(0, basePin + r - sunOv));
+      if (friOv !== undefined) maxT = Math.min(maxT, Math.max(0, basePin + r - friOv));
+
+      let t = 0;
+      if (maxT > 0) {
+        if (satOv !== undefined) {
+          t = Math.max(0, Math.min(maxT, satOv - 2 * r));
+        } else {
+          const wkndNeedTotal = Math.max(1, shDayNeed[4] + shDayNeed[5] + shDayNeed[6]);
+          const satShare = shDayNeed[5] / wkndNeedTotal;
+          const totalWkndShifts = basePin + 5 * r;
+          t = Math.max(0, Math.min(maxT, Math.round(totalWkndShifts * satShare) - 2 * r));
+        }
+      }
+      const p = r - t;
+      const rem = basePin - r - t;
+
+      let a = 0;
+      if (rem > 0) {
+        if (sunOv !== undefined) {
+          a = Math.max(0, Math.min(rem, sunOv - 2 * r));
+        } else if (friOv !== undefined) {
+          const bDesired = Math.max(0, Math.min(rem, friOv - 2 * r));
+          a = rem - bDesired;
+        } else {
+          const sunFriSum = shDayNeed[4] + shDayNeed[6];
+          a = sunFriSum > 0 ? Math.round(rem * (shDayNeed[6] / sunFriSum)) : Math.floor(rem / 2);
+          if (rem >= 2 && a === 0 && shDayNeed[6] > 0) a = 1;
+          if (rem >= 2 && a === rem && shDayNeed[4] > 0) a = rem - 1;
+        }
+      }
+      const b = Math.max(0, rem - a);
+
+      const basisPairs: [number, number][] = [];
+      for (let i = 0; i < t; i++) basisPairs.push([0, 6], [1, 2], [3, 4]);
+      for (let i = 0; i < p; i++) basisPairs.push([0, 1], [2, 3]);
+      for (let i = 0; i < a; i++) basisPairs.push([4, 5]);
+      for (let i = 0; i < b; i++) basisPairs.push([5, 6]);
+
+      rosterIndices.forEach((rosterIdx, idx) => {
+        const pair = basisPairs[idx] ?? [5, 6];
+        offPairByRosterIdx.set(rosterIdx, pair);
+        for (let d = 0; d < 7; d++) {
+          if (d !== pair[0] && d !== pair[1]) {
+            globalPinnedWorkByDay[d]++;
+          }
+        }
+      });
+      continue;
+    }
+
     const maxNeed = Math.max(1, ...shDayNeed);
-    // Desired daily working headcount across 5*P total shift-days
+    // Desired daily working headcount across 5*M total shift-days
     const desire = new Array<number>(7).fill(0);
     let fixedSum = 0;
     const unpinnedDays: number[] = [];
     for (let d = 0; d < 7; d++) {
       const ov = shDayOv?.get(d);
       if (ov !== undefined) {
-        const clamped = Math.min(P, ov);
+        const clamped = Math.min(M, ov);
         desire[d] = clamped;
         fixedSum += clamped;
       } else {
         unpinnedDays.push(d);
       }
     }
-    const remainingShifts = Math.max(0, 5 * P - fixedSum);
+    const remainingShifts = Math.max(0, 5 * M - fixedSum);
     const weightSum = unpinnedDays.reduce((s, d) => s + (shDayNeed[d] + 0.2 * maxNeed), 0) || 1;
     for (const d of unpinnedDays) {
       desire[d] = Math.min(
-        P,
+        M,
         (remainingShifts * (shDayNeed[d] + 0.2 * maxNeed)) / weightSum
       );
     }
@@ -1238,7 +1436,8 @@ export function generateWeeklySchedule(params: {
         let sc = 0;
         for (let d = 0; d < 7; d++) {
           if (d === pair[0] || d === pair[1]) {
-            // Penalize removing from explicitly over-target days less than empty days
+            const ov = shDayOv?.get(d);
+            if (ov !== undefined && groupWorkByDay[d] <= ov) sc -= 40;
             const surplusIfRemoved = groupWorkByDay[d] - desire[d];
             if (surplusIfRemoved < -0.5) sc -= 2;
             continue;
@@ -1249,7 +1448,7 @@ export function generateWeeklySchedule(params: {
         }
         // Anti-collapse diversity bias inside small pinned groups
         const usedTimes = pairUsage.get(pKey) ?? 0;
-        sc -= usedTimes * (P <= 8 ? 3.5 : 0.8);
+        sc -= usedTimes * (M <= 8 ? 3.5 : 0.8);
         if (sc > bestScore) {
           bestScore = sc;
           bestPair = pair;
@@ -1269,12 +1468,18 @@ export function generateWeeklySchedule(params: {
 
   // 4B. Stratified OFF-Pattern Assignment for Auto Pool Agents Matching Remaining Demand + Explicit Auto Day Overrides
   const autoDayWorkCount = new Array<number>(7).fill(0);
+  const autoDayAllLocked = new Array<boolean>(7).fill(false);
   const autoExplicitNeedByDay = WEEK_DAYS.map((_, d) => {
     let extra = 0;
+    let lockedShiftsCount = 0;
     for (const sh of primaryAutoPool) {
       const ov = dayOverridesMap.get(sh.id)?.get(d);
-      if (ov !== undefined) extra += ov;
+      if (ov !== undefined) {
+        extra += ov;
+        lockedShiftsCount++;
+      }
     }
+    autoDayAllLocked[d] = primaryAutoPool.length > 0 && lockedShiftsCount === primaryAutoPool.length;
     return extra;
   });
   const autoPairUsage = new Map<string, number>();
@@ -1289,9 +1494,17 @@ export function generateWeeklySchedule(params: {
         if (d === pair[0] || d === pair[1]) continue;
         const reqH = profiles[WEEK_DAYS[d]].requiredProdHours;
         const totalWorkD = globalPinnedWorkByDay[d] + autoDayWorkCount[d];
-        const deficit = reqH - totalWorkD * avgNetShiftHrs;
-        sc += deficit > 0 ? deficit * 2.6 : deficit * 0.25;
-        if (autoDayWorkCount[d] < autoExplicitNeedByDay[d]) sc += 30;
+        if (autoDayAllLocked[d]) {
+          if (autoDayWorkCount[d] < autoExplicitNeedByDay[d]) {
+            sc += 90 + (autoExplicitNeedByDay[d] - autoDayWorkCount[d]) * 4;
+          } else {
+            sc -= 140;
+          }
+        } else {
+          const deficit = reqH - totalWorkD * avgNetShiftHrs;
+          sc += deficit > 0 ? deficit * 2.6 : deficit * 0.25;
+          if (autoDayWorkCount[d] < autoExplicitNeedByDay[d]) sc += 30;
+        }
         if (totalWorkD === 0 && reqH > 0) sc += 100;
       }
       // Encourage smooth variety across OFF patterns when scores tie
@@ -1433,8 +1646,8 @@ export function generateWeeklySchedule(params: {
     const dayOv = dayOverridesMap.get(candidate.id)?.get(dayIdx);
     if (dayOv !== undefined) {
       const currCnt = shCounts.get(candidate.id)?.[dayIdx] ?? 0;
-      if (currCnt < dayOv) score += 280 + (dayOv - currCnt) * 40;
-      else score -= 320;
+      if (currCnt < dayOv) score += 1200 + (dayOv - currCnt) * 150;
+      else score -= 1600;
     }
     return score;
   };
@@ -1907,6 +2120,309 @@ export function generateWeeklySchedule(params: {
     if (!improved) break;
   }
 
+  // 5D. Hard Exact Reconciliation for Explicit Daily Cell Overrides & Locked Mon..Thu Targets
+  if (dayOverridesMap.size > 0 && activeIndices.length > 0) {
+    const lockedTargets: Map<string, number>[] = WEEK_DAYS.map((_, dIdx) => {
+      const m = new Map<string, number>();
+      let sum = 0;
+      for (const sh of catalogToUse) {
+        const tgt = dayOverridesMap.get(sh.id)?.get(dIdx);
+        if (tgt !== undefined) {
+          const clean = Math.max(0, Math.min(activeIndices.length, tgt));
+          m.set(sh.id, clean);
+          sum += clean;
+        }
+      }
+      if (sum > activeIndices.length) {
+        const scale = activeIndices.length / sum;
+        let remCap = activeIndices.length;
+        const entries = [...m.entries()].sort((a, b) => {
+          const aExp = explicitCellOverridesMap.get(a[0])?.has(dIdx) ? 1 : 0;
+          const bExp = explicitCellOverridesMap.get(b[0])?.has(dIdx) ? 1 : 0;
+          return bExp - aExp || b[1] - a[1];
+        });
+        for (let idx = 0; idx < entries.length; idx++) {
+          const [shId, val] = entries[idx];
+          const alloc = idx === entries.length - 1 ? Math.min(val, remCap) : Math.min(val, remCap, Math.round(val * scale));
+          m.set(shId, alloc);
+          remCap = Math.max(0, remCap - alloc);
+        }
+      }
+      return m;
+    });
+
+    const isRestSafeOnly = (
+      row: ScheduledAgentRow,
+      dIdx: number,
+      cand: ShiftTemplate,
+      overrideAssign?: Record<DayKey, AgentDayAssignment>
+    ): boolean => {
+      const baseAssign = overrideAssign ?? row.assignments;
+      const testAssign: Record<DayKey, AgentDayAssignment> = {
+        ...baseAssign,
+        [WEEK_DAYS[dIdx]]: {
+          dayKey: WEEK_DAYS[dIdx],
+          status: 'WORK',
+          shiftId: cand.id,
+          breaks: null,
+        },
+      };
+      const minRest = getMinimumWeeklyRestHours(testAssign, shiftMap);
+      return minRest === null || minRest >= rules.minInterShiftRestHours - 1e-6;
+    };
+
+    const offSetKeys = new Set(offPatterns.map((p) => `${p[0]}-${p[1]}`));
+    const isOffPairValidAfterFlip = (row: ScheduledAgentRow, makeWorkDay: number, makeOffDay: number): boolean => {
+      const offs: number[] = [];
+      for (let d = 0; d < 7; d++) {
+        const wasOff = row.assignments[WEEK_DAYS[d]].status === 'OFF';
+        const isOffNow = d === makeOffDay || (wasOff && d !== makeWorkDay);
+        if (isOffNow) offs.push(d);
+      }
+      return offs.length === 2 && offSetKeys.has(`${offs[0]}-${offs[1]}`);
+    };
+
+    const moveAgentShiftSameDay = (rIdx: number, dIdx: number, oldId: string, newId: string) => {
+      draftRows[rIdx].assignments[WEEK_DAYS[dIdx]].shiftId = newId;
+      shiftDayCounts.get(oldId)![dIdx] -= 1;
+      shiftDayCounts.get(newId)![dIdx] += 1;
+    };
+
+    // Pass 1: Same-day reassignments from surplus/unlocked shifts to deficit locked shifts
+    for (let dIdx = 0; dIdx < 7; dIdx++) {
+      const dk = WEEK_DAYS[dIdx];
+      const dayLocks = lockedTargets[dIdx];
+      if (dayLocks.size === 0) continue;
+
+      for (const [shId, tgt] of dayLocks.entries()) {
+        const shUnder = shiftMap.get(shId);
+        if (!shUnder) continue;
+        while ((shiftDayCounts.get(shId)?.[dIdx] ?? 0) < tgt) {
+          let bestDonor: { rIdx: number; oldId: string; tier: number } | null = null;
+          for (const tier of [0, 1]) {
+            for (const rIdx of activeIndices) {
+              const row = draftRows[rIdx];
+              const a = row.assignments[dk];
+              if (a.status !== 'WORK' || !a.shiftId || a.shiftId === shId) continue;
+              const oldCnt = shiftDayCounts.get(a.shiftId)?.[dIdx] ?? 0;
+              const oldTgt = dayLocks.get(a.shiftId);
+              if (oldTgt !== undefined && oldCnt <= oldTgt) continue;
+              if (tier === 0 && !isCandidateShiftFeasible(row, dIdx, shUnder)) continue;
+              if (tier === 1 && !isRestSafeOnly(row, dIdx, shUnder)) continue;
+              bestDonor = { rIdx, oldId: a.shiftId, tier };
+              break;
+            }
+            if (bestDonor) break;
+          }
+          if (!bestDonor) break;
+          moveAgentShiftSameDay(bestDonor.rIdx, dIdx, bestDonor.oldId, shId);
+        }
+      }
+    }
+
+    // Pass 2: Cross-day swap preserving 5 workdays/week to fix locked days whose total headcount differs
+    const unlockedShiftsForDay = (dIdx: number) =>
+      catalogToUse.filter((sh) => !lockedTargets[dIdx].has(sh.id) || (shiftDayCounts.get(sh.id)?.[dIdx] ?? 0) < (lockedTargets[dIdx].get(sh.id) ?? 0));
+
+    for (let step = 0; step < activeIndices.length * 4; step++) {
+      let swapped = false;
+
+      // 2A: Fix deficit locked cells by taking a surplus/unlocked workday from another day on the same agent
+      for (let dNeed = 0; dNeed < 7 && !swapped; dNeed++) {
+        for (const [shId, tgt] of lockedTargets[dNeed].entries()) {
+          if ((shiftDayCounts.get(shId)?.[dNeed] ?? 0) >= tgt) continue;
+          const shNeed = shiftMap.get(shId);
+          if (!shNeed) continue;
+
+          for (const tier of [0, 1, 2]) {
+            for (const rIdx of activeIndices) {
+              const row = draftRows[rIdx];
+              if (row.assignments[WEEK_DAYS[dNeed]].status !== 'OFF') continue;
+
+              for (let dGive = 0; dGive < 7; dGive++) {
+                if (dGive === dNeed) continue;
+                const aGive = row.assignments[WEEK_DAYS[dGive]];
+                if (aGive.status !== 'WORK' || !aGive.shiftId) continue;
+                const giveTgt = lockedTargets[dGive].get(aGive.shiftId);
+                const giveCnt = shiftDayCounts.get(aGive.shiftId)?.[dGive] ?? 0;
+                if (giveTgt !== undefined && giveCnt <= giveTgt) continue;
+
+                const testAssign: Record<DayKey, AgentDayAssignment> = {
+                  ...row.assignments,
+                  [WEEK_DAYS[dGive]]: { dayKey: WEEK_DAYS[dGive], status: 'OFF', shiftId: null, breaks: null },
+                };
+                if (tier <= 1 && !isOffPairValidAfterFlip(row, dNeed, dGive)) continue;
+                if (tier === 0 && !isCandidateShiftFeasible(row, dNeed, shNeed, testAssign)) continue;
+                if (tier === 1 && !isRestSafeOnly(row, dNeed, shNeed, testAssign)) continue;
+                if (tier === 2 && !isRestSafeOnly(row, dNeed, shNeed, testAssign)) continue;
+
+                row.assignments[WEEK_DAYS[dGive]] = { dayKey: WEEK_DAYS[dGive], status: 'OFF', shiftId: null, breaks: null };
+                row.assignments[WEEK_DAYS[dNeed]] = { dayKey: WEEK_DAYS[dNeed], status: 'WORK', shiftId: shNeed.id, breaks: null };
+                shiftDayCounts.get(aGive.shiftId)![dGive] -= 1;
+                shiftDayCounts.get(shNeed.id)![dNeed] += 1;
+                swapped = true;
+                break;
+              }
+              if (swapped) break;
+            }
+            if (swapped) break;
+          }
+          if (swapped) break;
+        }
+      }
+
+      if (swapped) continue;
+
+      // 2B: Fix excess locked cells by shifting that workday onto an under-target or unlocked day
+      for (let dOver = 0; dOver < 7 && !swapped; dOver++) {
+        for (const [shId, tgt] of lockedTargets[dOver].entries()) {
+          if ((shiftDayCounts.get(shId)?.[dOver] ?? 0) <= tgt) continue;
+
+          for (const tier of [0, 1, 2]) {
+            for (const rIdx of activeIndices) {
+              const row = draftRows[rIdx];
+              const aOver = row.assignments[WEEK_DAYS[dOver]];
+              if (aOver.status !== 'WORK' || aOver.shiftId !== shId) continue;
+
+              for (let dNeed = 0; dNeed < 7; dNeed++) {
+                if (dNeed === dOver) continue;
+                if (row.assignments[WEEK_DAYS[dNeed]].status !== 'OFF') continue;
+                if (tier <= 1 && !isOffPairValidAfterFlip(row, dNeed, dOver)) continue;
+
+                const testAssign: Record<DayKey, AgentDayAssignment> = {
+                  ...row.assignments,
+                  [WEEK_DAYS[dOver]]: { dayKey: WEEK_DAYS[dOver], status: 'OFF', shiftId: null, breaks: null },
+                };
+
+                // Prefer filling a deficit locked shift on dNeed first; otherwise any feasible unlocked daytime shift
+                const cands = unlockedShiftsForDay(dNeed).sort((a, b) => {
+                  const aDef = (lockedTargets[dNeed].get(a.id) ?? -1) - (shiftDayCounts.get(a.id)?.[dNeed] ?? 0);
+                  const bDef = (lockedTargets[dNeed].get(b.id) ?? -1) - (shiftDayCounts.get(b.id)?.[dNeed] ?? 0);
+                  return (bDef > 0 ? 1 : 0) - (aDef > 0 ? 1 : 0) ||
+                    (isOvernightShiftWindow(a) ? 1 : 0) - (isOvernightShiftWindow(b) ? 1 : 0);
+                });
+                const chosen = cands.find((cand) =>
+                  tier === 0 ? isCandidateShiftFeasible(row, dNeed, cand, testAssign) : isRestSafeOnly(row, dNeed, cand, testAssign)
+                );
+                if (!chosen) continue;
+
+                row.assignments[WEEK_DAYS[dOver]] = { dayKey: WEEK_DAYS[dOver], status: 'OFF', shiftId: null, breaks: null };
+                row.assignments[WEEK_DAYS[dNeed]] = { dayKey: WEEK_DAYS[dNeed], status: 'WORK', shiftId: chosen.id, breaks: null };
+                shiftDayCounts.get(shId)![dOver] -= 1;
+                shiftDayCounts.get(chosen.id)![dNeed] += 1;
+                swapped = true;
+                break;
+              }
+              if (swapped) break;
+            }
+            if (swapped) break;
+          }
+          if (swapped) break;
+        }
+      }
+
+      if (!swapped) break;
+    }
+
+    // Pass 3: Strict final convergence for any remaining delta on explicitly user-edited cells
+    for (let dIdx = 0; dIdx < 7; dIdx++) {
+      const dk = WEEK_DAYS[dIdx];
+      for (const sh of catalogToUse) {
+        const expTgt = explicitCellOverridesMap.get(sh.id)?.get(dIdx);
+        if (expTgt === undefined) continue;
+        const clampedTgt = Math.min(activeIndices.length, expTgt);
+
+        while ((shiftDayCounts.get(sh.id)?.[dIdx] ?? 0) < clampedTgt) {
+          let moved = false;
+          // Try transferring from non-explicit shift on same day first
+          for (const tier of [0, 1, 2]) {
+            for (const rIdx of activeIndices) {
+              const row = draftRows[rIdx];
+              const a = row.assignments[dk];
+              if (a.status !== 'WORK' || !a.shiftId || a.shiftId === sh.id) continue;
+              const srcExp = explicitCellOverridesMap.get(a.shiftId)?.get(dIdx);
+              if (srcExp !== undefined && (shiftDayCounts.get(a.shiftId)?.[dIdx] ?? 0) <= srcExp) continue;
+              if (tier === 0 && !isCandidateShiftFeasible(row, dIdx, sh)) continue;
+              if (tier === 1 && !isRestSafeOnly(row, dIdx, sh)) continue;
+              moveAgentShiftSameDay(rIdx, dIdx, a.shiftId, sh.id);
+              moved = true;
+              break;
+            }
+            if (moved) break;
+          }
+          if (moved) continue;
+
+          // Otherwise promote an OFF agent on dIdx
+          let promoted = false;
+          for (const tier of [0, 1, 2]) {
+            for (const rIdx of activeIndices) {
+              const row = draftRows[rIdx];
+              if (row.assignments[dk].status !== 'OFF') continue;
+              if (tier === 0 && !isCandidateShiftFeasible(row, dIdx, sh)) continue;
+              if (tier === 1 && !isRestSafeOnly(row, dIdx, sh)) continue;
+              row.assignments[dk] = { dayKey: dk, status: 'WORK', shiftId: sh.id, breaks: null };
+              shiftDayCounts.get(sh.id)![dIdx] += 1;
+              promoted = true;
+              break;
+            }
+            if (promoted) break;
+          }
+          if (!promoted) break;
+        }
+
+        while ((shiftDayCounts.get(sh.id)?.[dIdx] ?? 0) > clampedTgt) {
+          let movedOut = false;
+          const receivers = catalogToUse.filter((c) => {
+            if (c.id === sh.id) return false;
+            const cExp = explicitCellOverridesMap.get(c.id)?.get(dIdx);
+            const cLock = lockedTargets[dIdx].get(c.id);
+            const curr = shiftDayCounts.get(c.id)?.[dIdx] ?? 0;
+            if (cExp !== undefined) return curr < cExp;
+            if (cLock !== undefined) return curr < cLock;
+            return true;
+          });
+          for (const rIdx of activeIndices) {
+            const row = draftRows[rIdx];
+            if (row.assignments[dk].status !== 'WORK' || row.assignments[dk].shiftId !== sh.id) continue;
+            const cand = receivers.find((c) => isCandidateShiftFeasible(row, dIdx, c)) ?? receivers.find((c) => isRestSafeOnly(row, dIdx, c));
+            if (cand) {
+              moveAgentShiftSameDay(rIdx, dIdx, sh.id, cand.id);
+              movedOut = true;
+              break;
+            }
+          }
+          if (movedOut) continue;
+
+          // Last resort: drop one agent on (sh, dIdx) to OFF
+          const dropIdx = activeIndices.find(
+            (rIdx) => draftRows[rIdx].assignments[dk].status === 'WORK' && draftRows[rIdx].assignments[dk].shiftId === sh.id
+          );
+          if (dropIdx === undefined) break;
+          draftRows[dropIdx].assignments[dk] = { dayKey: dk, status: 'OFF', shiftId: null, breaks: null };
+          shiftDayCounts.get(sh.id)![dIdx] -= 1;
+        }
+      }
+    }
+
+    // Synchronize gross15 and shiftDayCounts cleanly from reconciled draftRows before Break Staggering
+    for (let d = 0; d < 7; d++) gross15[d].fill(0);
+    for (const sh of catalogToUse) shiftDayCounts.set(sh.id, new Array<number>(7).fill(0));
+    for (const rIdx of activeIndices) {
+      for (let dIdx = 0; dIdx < 7; dIdx++) {
+        const a = draftRows[rIdx].assignments[WEEK_DAYS[dIdx]];
+        if (a.status === 'WORK' && a.shiftId) {
+          const sh = shiftMap.get(a.shiftId);
+          if (sh) {
+            shiftDayCounts.get(sh.id)![dIdx] += 1;
+            for (const pos of getShiftSlotsForDay(sh, dIdx)) {
+              gross15[pos.dayIdx][pos.qIdx] += 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // 6. Assign Staggered 15-Min Breaks (First 15 + Lunch 30 + Last 15) with Quadratic Concurrency Smoothing & 1-Opt Polish
   const liveSurplus15: number[][] = Array.from({ length: 7 }, (_, d) =>
     Array.from({ length: 96 }, (__, q) => gross15[d][q] - req15[d][q])
@@ -1976,6 +2492,8 @@ export function generateWeeklySchedule(params: {
       if (assign.status !== 'WORK' || !assign.shiftId || !assign.breaks) continue;
       const oldShift = shiftMap.get(assign.shiftId);
       if (!oldShift) continue;
+      const oldDayTgt = dayOverridesMap.get(oldShift.id)?.get(dIdx);
+      if (oldDayTgt !== undefined && (shiftDayCounts.get(oldShift.id)?.[dIdx] ?? 0) <= oldDayTgt) continue;
 
       const dayCands = getAllowedShiftsOnDay(dIdx, oldShift.id);
       if (dayCands.length <= 1) continue;
@@ -2035,6 +2553,8 @@ export function generateWeeklySchedule(params: {
 
       for (const cand of dayCands) {
         if (cand.id === oldShift.id) continue;
+        const candDayTgt = dayOverridesMap.get(cand.id)?.get(dIdx);
+        if (candDayTgt !== undefined && (shiftDayCounts.get(cand.id)?.[dIdx] ?? 0) >= candDayTgt) continue;
         if (!isCandidateShiftFeasible(row, dIdx, cand)) continue;
         // Preview candidate breaks on cand without modifying live matrices permanently
         const candSlots = getShiftSlotsForDay(cand, dIdx);

@@ -660,4 +660,128 @@ describe('WFM Agent Shift Scheduling & Break Optimizer Engine', () => {
     assert.ok(rowPos[1].finalGrossFte > baseCell.finalGrossFte, `Expected +10s AHT FTE (${rowPos[1].finalGrossFte}) > base (${baseCell.finalGrossFte})`);
     assert.ok(rowBase[0].finalGrossFte < baseCell.finalGrossFte && rowBase[2].finalGrossFte > baseCell.finalGrossFte);
   });
+
+  it('applies top-card pinned distribution (1,4,15,12,7,5,5,4) strictly to Mon–Thu and auto-distributes remaining shifts across Fri–Sun', () => {
+    const catalog8 = parseShiftCatalogText(
+      [
+        '00:00-09:00',
+        '07:00-16:00',
+        '08:00-17:00',
+        '09:00-18:00',
+        '10:00-19:00',
+        '12:00-21:00',
+        '13:00-22:00',
+        '15:00-00:00',
+      ].join('\n')
+    );
+    const expectedMonThu: Record<string, number> = {
+      '00:00-09:00': 1,
+      '07:00-16:00': 4,
+      '08:00-17:00': 15,
+      '09:00-18:00': 12,
+      '10:00-19:00': 7,
+      '12:00-21:00': 5,
+      '13:00-22:00': 5,
+      '15:00-00:00': 4,
+    };
+    const res = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 66,
+      namedAgents: [],
+      leaveCounts: { annual: 5, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: catalog8,
+      rules: {
+        ...DEFAULT_SCHEDULING_RULES,
+        shiftHeadcountOverrides: expectedMonThu,
+      },
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    assert.equal(res.summary.activeSchedulableCount, 59);
+    assert.equal(res.summary.totalWorkShifts, 295);
+    assert.equal(res.summary.violationAgentsCount, 0);
+
+    let friSatSunTotal = 0;
+    for (const row of res.shiftDailyMix) {
+      const target = expectedMonThu[row.shiftId];
+      assert.equal(row.assignedPoolCount, target, `${row.shiftId} pool badge mismatch`);
+      assert.equal(row.byDay.Mon, target, `${row.shiftId} Mon`);
+      assert.equal(row.byDay.Tue, target, `${row.shiftId} Tue`);
+      assert.equal(row.byDay.Wed, target, `${row.shiftId} Wed`);
+      assert.equal(row.byDay.Thu, target, `${row.shiftId} Thu`);
+      friSatSunTotal += row.byDay.Fri + row.byDay.Sat + row.byDay.Sun;
+    }
+    assert.equal(friSatSunTotal, 83);
+  });
+
+  it('locks manually edited Sun column cells (1,2,5,5,3,2,3,3) into the agent roster while auto-balancing unedited days', () => {
+    const catalog8 = parseShiftCatalogText(
+      [
+        '00:00-09:00',
+        '07:00-16:00',
+        '08:00-17:00',
+        '09:00-18:00',
+        '10:00-19:00',
+        '12:00-21:00',
+        '13:00-22:00',
+        '15:00-00:00',
+      ].join('\n')
+    );
+    const monThuPins: Record<string, number> = {
+      '00:00-09:00': 1,
+      '07:00-16:00': 4,
+      '08:00-17:00': 15,
+      '09:00-18:00': 12,
+      '10:00-19:00': 7,
+      '12:00-21:00': 5,
+      '13:00-22:00': 5,
+      '15:00-00:00': 4,
+    };
+    const sunExpected: Record<string, number> = {
+      '00:00-09:00': 1,
+      '07:00-16:00': 2,
+      '08:00-17:00': 5,
+      '09:00-18:00': 5,
+      '10:00-19:00': 3,
+      '12:00-21:00': 2,
+      '13:00-22:00': 3,
+      '15:00-00:00': 3,
+    };
+    const sunDayOverrides = Object.fromEntries(
+      Object.entries(sunExpected).map(([shId, val]) => [shId, { Sun: val }])
+    );
+
+    const resCombined = generateWeeklySchedule({
+      inputMode: 'headcount',
+      headcountInput: 66,
+      namedAgents: [],
+      leaveCounts: { annual: 5, maternity: 2, resignations: 0, termination: 0, upl: 0, paternity: 0 },
+      shiftCatalog: catalog8,
+      rules: {
+        ...DEFAULT_SCHEDULING_RULES,
+        shiftHeadcountOverrides: monThuPins,
+        shiftDayHeadcountOverrides: sunDayOverrides,
+      },
+      nextWeekDays: sampleNextWeekDays(),
+      dayCurves: DEFAULT_30M_CURVES,
+      erlangConfig: DEFAULT_ERLANG,
+    });
+
+    assert.equal(resCombined.summary.totalWorkShifts, 295);
+    assert.equal(resCombined.summary.violationAgentsCount, 0);
+
+    for (const row of resCombined.shiftDailyMix) {
+      assert.equal(row.byDay.Sun, sunExpected[row.shiftId], `${row.shiftId} Sun in shiftDailyMix`);
+      const rosterSunCount = resCombined.agents.filter(
+        (ag) => ag.assignments.Sun.status === 'WORK' && ag.assignments.Sun.shiftId === row.shiftId
+      ).length;
+      assert.equal(rosterSunCount, sunExpected[row.shiftId], `${row.shiftId} Sun in agents roster`);
+      assert.equal(row.byDay.Mon, monThuPins[row.shiftId]);
+      assert.equal(row.byDay.Tue, monThuPins[row.shiftId]);
+      assert.equal(row.byDay.Wed, monThuPins[row.shiftId]);
+      assert.equal(row.byDay.Thu, monThuPins[row.shiftId]);
+    }
+  });
 });

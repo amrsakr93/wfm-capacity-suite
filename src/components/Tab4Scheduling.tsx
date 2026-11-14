@@ -302,6 +302,61 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
   const [editingCell, setEditingCell] = useState<{ agentId: string; dayKey: DayKey } | null>(null);
   const [selectedPopoverDays, setSelectedPopoverDays] = useState<DayKey[]>(['Mon']);
 
+  // Staged local drafts so multi-cell typing never triggers solver auto-adjust mid-edit
+  const [draftShiftPins, setDraftShiftPins] = useState<Record<string, string> | null>(null);
+  const [draftCellEdits, setDraftCellEdits] = useState<Record<string, Partial<Record<DayKey, string>>>>({});
+
+  const hasPendingCellEdits = Object.values(draftCellEdits).some(
+    (m) => !!m && Object.keys(m).length > 0
+  );
+
+  const commitDraftShiftPins = () => {
+    if (!draftShiftPins) return;
+    setRules((r) => {
+      const next: Record<string, number | null> = {};
+      for (const [shId, raw] of Object.entries(draftShiftPins)) {
+        const trimmed = raw.trim();
+        if (trimmed === '') continue;
+        const parsed = Number(trimmed);
+        if (Number.isFinite(parsed)) {
+          next[shId] = Math.max(0, Math.min(500, Math.round(parsed)));
+        }
+      }
+      return { ...r, shiftHeadcountOverrides: next };
+    });
+    setDraftShiftPins(null);
+  };
+
+  const commitDraftCellEdits = () => {
+    if (!hasPendingCellEdits) return;
+    setRules((r) => {
+      const nextAll = { ...(r.shiftDayHeadcountOverrides ?? {}) };
+      for (const [shId, dayMap] of Object.entries(draftCellEdits)) {
+        if (!dayMap) continue;
+        const nextSh = { ...(nextAll[shId] ?? {}) };
+        for (const [dkKey, rawVal] of Object.entries(dayMap)) {
+          const dk = dkKey as DayKey;
+          const trimmed = (rawVal ?? '').trim();
+          if (trimmed === '') {
+            delete nextSh[dk];
+          } else {
+            const parsed = Number(trimmed);
+            if (Number.isFinite(parsed)) {
+              nextSh[dk] = Math.max(0, Math.min(500, Math.round(parsed)));
+            }
+          }
+        }
+        if (Object.keys(nextSh).length === 0) {
+          delete nextAll[shId];
+        } else {
+          nextAll[shId] = nextSh;
+        }
+      }
+      return { ...r, shiftDayHeadcountOverrides: nextAll };
+    });
+    setDraftCellEdits({});
+  };
+
   const openCellEditor = (agentId: string, dayKey: DayKey) => {
     setEditingCell({ agentId, dayKey });
     setSelectedPopoverDays([dayKey]);
@@ -1043,18 +1098,35 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
           {/* Elevated Chronological Shift Catalog Grid + Manual Per-Shift Headcount Control */}
           {(() => {
             const ovMap = rules.shiftHeadcountOverrides ?? {};
+            const readDraftPinNumber = (shId: string): number | null => {
+              if (draftShiftPins) {
+                const raw = (draftShiftPins[shId] ?? '').trim();
+                if (raw === '') return null;
+                const parsed = Number(raw);
+                return Number.isFinite(parsed) ? Math.max(0, Math.min(500, Math.round(parsed))) : null;
+              }
+              const v = ovMap[shId];
+              return v != null && Number.isFinite(v) ? Math.max(0, Math.round(v)) : null;
+            };
             const pinnedPoolSum = enabledShifts.reduce((acc, sh) => {
-              const v = ovMap[sh.id];
-              return v != null && Number.isFinite(v) ? acc + Math.max(0, Math.round(v)) : acc;
+              const v = readDraftPinNumber(sh.id);
+              return v !== null ? acc + v : acc;
             }, 0);
-            const hasAnyPin = Object.values(ovMap).some((v) => v != null && Number.isFinite(v));
-            const hasAnyAutoShift = enabledShifts.some(
-              (sh) => ovMap[sh.id] == null || !Number.isFinite(ovMap[sh.id]!)
-            );
+            const hasAnyPin = enabledShifts.some((sh) => readDraftPinNumber(sh.id) !== null);
+            const hasAnyAutoShift = enabledShifts.some((sh) => readDraftPinNumber(sh.id) === null);
             const remainingAuto = Math.max(0, summary.activeSchedulableCount - pinnedPoolSum);
             const hasDaytimeFallback = enabledShifts.some(
-              (sh) => ovMap[sh.id] !== 0 && !isOvernightShiftWindow(sh)
+              (sh) => readDraftPinNumber(sh.id) !== 0 && !isOvernightShiftWindow(sh)
             );
+            const openPinDraftIfNeeded = (): Record<string, string> => {
+              if (draftShiftPins) return { ...draftShiftPins };
+              const init: Record<string, string> = {};
+              for (const sh of sortedCatalog) {
+                const v = ovMap[sh.id];
+                if (v != null && Number.isFinite(v)) init[sh.id] = String(Math.round(v));
+              }
+              return init;
+            };
 
             return (
               <div className="space-y-2.5">
@@ -1076,41 +1148,74 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                       Pinned: {pinnedPoolSum} / {summary.activeSchedulableCount} Active Pool · {remainingAuto} Remaining Auto
                     </span>
                   </div>
-                  {hasAnyPin && (
-                    <button
-                      type="button"
-                      onClick={() => setRules((r) => ({ ...r, shiftHeadcountOverrides: {} }))}
-                      className="cnx-pill-interactive rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
-                    >
-                      Reset All Pins to Auto
-                    </button>
-                  )}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {draftShiftPins !== null && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={commitDraftShiftPins}
+                          className="cnx-pill-interactive rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 text-[11px] font-bold shadow-xs cursor-pointer"
+                        >
+                          ✓ Apply Shift Pins (Mon–Thu)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDraftShiftPins(null)}
+                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                    {(hasAnyPin || draftShiftPins !== null) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftShiftPins(null);
+                          setRules((r) => ({ ...r, shiftHeadcountOverrides: {} }));
+                        }}
+                        className="cnx-pill-interactive rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
+                      >
+                        Reset All Pins to Auto
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {pinnedPoolSum > summary.activeSchedulableCount ? (
                   <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
                     Manual pins total ({pinnedPoolSum}) exceeds Active Pool ({summary.activeSchedulableCount}). Extra pins are capped at active availability.
                   </div>
-                ) : hasAnyPin && !hasAnyAutoShift && remainingAuto > 0 ? (
+                ) : hasAnyPin && !hasAnyAutoShift ? (
                   <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] font-semibold text-amber-800 dark:text-amber-200 flex items-center gap-2">
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600 dark:text-amber-300" />
                     <span>
-                      All shifts pinned below Active Pool ({pinnedPoolSum} / {summary.activeSchedulableCount}) —{' '}
-                      <strong>{remainingAuto} unpinned agents</strong> are auto-routed strictly onto{' '}
-                      {hasDaytimeFallback ? 'Daytime / Peak shifts (overnight shifts protected).' : 'active non-zero shifts.'}
+                      Pinned shift headcounts lock <strong>Mon–Thu ({pinnedPoolSum}/day)</strong> — remaining{' '}
+                      <strong>
+                        {Math.max(0, summary.activeSchedulableCount * rules.maxWorkdaysPerWeek - pinnedPoolSum * 4)} weekly shifts
+                      </strong>{' '}
+                      distribute across <strong>Fri–Sun</strong> by volume{hasDaytimeFallback ? ' (overnight shifts protected).' : '.'}
                     </span>
                   </div>
                 ) : hasAnyPin && hasAnyAutoShift && remainingAuto > 0 ? (
                   <div className="rounded-xl border border-sky-500/30 bg-sky-500/8 px-3 py-1.5 text-[11px] text-sky-700 dark:text-sky-300 font-medium">
-                    Pinned shifts are strictly locked — all <strong>{remainingAuto} remaining heads</strong> route exclusively into your unpinned Auto shift(s).
+                    Pinned shifts are locked — all <strong>{remainingAuto} remaining heads</strong> route exclusively into your unpinned Auto shift(s).
                   </div>
                 ) : null}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {sortedCatalog.map((shift) => {
                 const mix = scheduleResult.shiftDailyMix.find((m) => m.shiftId === shift.id);
+                const draftRaw = draftShiftPins ? draftShiftPins[shift.id] : undefined;
                 const rawOverride = rules.shiftHeadcountOverrides?.[shift.id];
-                const isPinned = rawOverride != null && Number.isFinite(rawOverride);
+                const isPendingPin = draftShiftPins !== null && draftRaw !== undefined;
+                const displayedPinStr =
+                  draftShiftPins !== null
+                    ? (draftRaw ?? '')
+                    : rawOverride != null && Number.isFinite(rawOverride)
+                      ? String(rawOverride)
+                      : '';
+                const isPinned = displayedPinStr.trim() !== '';
                 const poolCount = mix?.assignedPoolCount ?? 0;
                 const avgDaily = mix?.avgPerDay ?? 0;
 
@@ -1120,9 +1225,11 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                     className={`cnx-input-tile rounded-xl border p-3 transition ${
                       !shift.enabled
                         ? 'opacity-55 border-slate-300 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-950/40'
-                        : isPinned
-                          ? 'border-amber-500/50 bg-amber-500/[0.06] dark:bg-amber-500/[0.08]'
-                          : 'border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/70'
+                        : isPendingPin
+                          ? 'border-emerald-500/60 bg-emerald-500/[0.07] dark:bg-emerald-500/[0.08]'
+                          : isPinned
+                            ? 'border-amber-500/50 bg-amber-500/[0.06] dark:bg-amber-500/[0.08]'
+                            : 'border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/70'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2 mb-2.5">
@@ -1162,6 +1269,11 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                             type="button"
                             onClick={() => {
                               setShiftCatalog((prev) => prev.filter((s) => s.id !== shift.id));
+                              if (draftShiftPins && shift.id in draftShiftPins) {
+                                const nextDraft = { ...draftShiftPins };
+                                delete nextDraft[shift.id];
+                                setDraftShiftPins(nextDraft);
+                              }
                               setRules((r) => {
                                 if (!r.shiftHeadcountOverrides || !(shift.id in r.shiftHeadcountOverrides)) {
                                   return r;
@@ -1184,6 +1296,10 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                       <div className="text-[10px] font-medium leading-tight">
                         {!shift.enabled ? (
                           <span className="text-slate-400">Disabled in pool</span>
+                        ) : isPendingPin ? (
+                          <span className="text-emerald-600 dark:text-emerald-300 font-bold">
+                            Staged · Click Apply
+                          </span>
                         ) : isPinned ? (
                           <span className="text-amber-600 dark:text-amber-300 font-bold">
                             Pinned · ~{avgDaily.toFixed(1)}/d
@@ -1202,35 +1318,45 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                           max={500}
                           step={1}
                           disabled={!shift.enabled}
-                          value={isPinned ? String(rawOverride) : ''}
+                          value={displayedPinStr}
                           placeholder={`Auto (${poolCount})`}
                           aria-label={`Scheduled headcount override for shift ${shift.label}`}
                           onChange={(e) => {
-                            const raw = e.target.value.trim();
-                            setRules((r) => {
-                              const next = { ...(r.shiftHeadcountOverrides ?? {}) };
-                              if (raw === '') {
-                                delete next[shift.id];
-                              } else {
-                                const parsed = Number(raw);
-                                if (!Number.isFinite(parsed)) return r;
-                                next[shift.id] = Math.max(0, Math.min(500, Math.round(parsed)));
-                              }
-                              return { ...r, shiftHeadcountOverrides: next };
-                            });
+                            const val = e.target.value;
+                            const nextDraft = openPinDraftIfNeeded();
+                            if (val.trim() === '') {
+                              delete nextDraft[shift.id];
+                            } else {
+                              nextDraft[shift.id] = val;
+                            }
+                            setDraftShiftPins(nextDraft);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.currentTarget.blur();
+                              commitDraftShiftPins();
+                            } else if (e.key === 'Escape') {
+                              setDraftShiftPins(null);
+                            }
                           }}
                           className="w-24 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right text-xs font-mono font-bold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-sky-500 disabled:opacity-50"
                         />
                         {isPinned && (
                           <button
                             type="button"
-                            onClick={() =>
-                              setRules((r) => {
-                                const next = { ...(r.shiftHeadcountOverrides ?? {}) };
-                                delete next[shift.id];
-                                return { ...r, shiftHeadcountOverrides: next };
-                              })
-                            }
+                            onClick={() => {
+                              if (draftShiftPins !== null) {
+                                const nextDraft = { ...draftShiftPins };
+                                delete nextDraft[shift.id];
+                                setDraftShiftPins(nextDraft);
+                              } else {
+                                setRules((r) => {
+                                  const next = { ...(r.shiftHeadcountOverrides ?? {}) };
+                                  delete next[shift.id];
+                                  return { ...r, shiftHeadcountOverrides: next };
+                                });
+                              }
+                            }}
                             title="Clear manual pin and let Auto-Optimizer assign headcount"
                             className="rounded-md border border-amber-500/40 bg-amber-500/12 px-1.5 py-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 cursor-pointer"
                           >
@@ -1431,7 +1557,11 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <button
               type="button"
-              onClick={onAutoGenerate}
+              onClick={() => {
+                commitDraftShiftPins();
+                commitDraftCellEdits();
+                onAutoGenerate();
+              }}
               className="cnx-pill-interactive flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#0088c2] to-[#14b8a6] hover:brightness-110 text-white px-4 py-2.5 text-xs font-extrabold shadow-md cursor-pointer"
             >
               <Sparkles className="w-4 h-4" />
@@ -1755,7 +1885,11 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
 
             <button
               type="button"
-              onClick={onAutoGenerate}
+              onClick={() => {
+                commitDraftShiftPins();
+                commitDraftCellEdits();
+                onAutoGenerate();
+              }}
               title="Reset manual edits and re-optimize schedule"
               className="cnx-pill-interactive inline-flex items-center gap-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer"
             >
@@ -2353,6 +2487,44 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
             Object.values(shMap).some((v) => v != null && Number.isFinite(v))
         );
 
+        const getEffectiveCellCount = (row: typeof scheduleResult.shiftDailyMix[number], d: DayKey): number => {
+          const staged = draftCellEdits[row.shiftId]?.[d];
+          if (staged !== undefined) {
+            const trimmed = staged.trim();
+            if (trimmed === '') return row.byDay[d];
+            const parsed = Number(trimmed);
+            if (Number.isFinite(parsed)) return Math.max(0, Math.min(500, Math.round(parsed)));
+          }
+          return row.byDay[d];
+        };
+
+        const liveRowTotals = scheduleResult.shiftDailyMix.map((row) => {
+          const byDayLive = {} as Record<DayKey, number>;
+          let rowSum = 0;
+          for (const d of WEEK_DAYS) {
+            const val = getEffectiveCellCount(row, d);
+            byDayLive[d] = val;
+            rowSum += val;
+          }
+          return { row, byDayLive, rowSum };
+        });
+
+        const dailyActive = WEEK_DAYS.map((d) =>
+          liveRowTotals.reduce((acc, item) => acc + item.byDayLive[d], 0)
+        );
+        const dailyOff = hasPendingCellEdits
+          ? dailyActive.map((act) => Math.max(0, summary.activeSchedulableCount - act))
+          : WEEK_DAYS.map((d) => scheduleResult.agents.filter((a) => a.assignments[d].status === 'OFF').length);
+        const dailyLeave = WEEK_DAYS.map(
+          (d) =>
+            scheduleResult.agents.filter(
+              (a) => a.assignments[d].status !== 'WORK' && a.assignments[d].status !== 'OFF'
+            ).length
+        );
+        const totalWeeklyActive = dailyActive.reduce((s, v) => s + v, 0);
+        const totalWeeklyOff = dailyOff.reduce((s, v) => s + v, 0);
+        const totalWeeklyLeave = dailyLeave.reduce((s, v) => s + v, 0);
+
         return (
       <section className="bento-card-promax rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
         <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
@@ -2360,14 +2532,35 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
             <CalendarClock className="w-4 h-4 text-sky-500" />
             <span>Scheduled Headcount Per Shift × Per Day (Mon → Sun Coverage Mix)</span>
             <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300">
-              Click any Mon–Sun cell to pin exact daily heads
+              Edit cells without auto-adjust — untouched cells stay Auto
             </span>
           </div>
-          <div className="flex items-center gap-2.5">
-            {hasAnyDailyPins && (
+          <div className="flex flex-wrap items-center gap-2">
+            {hasPendingCellEdits && (
+              <>
+                <button
+                  type="button"
+                  onClick={commitDraftCellEdits}
+                  className="cnx-pill-interactive rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 text-[11px] font-bold shadow-xs cursor-pointer"
+                >
+                  ✓ Apply Manual Edits
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraftCellEdits({})}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Discard
+                </button>
+              </>
+            )}
+            {(hasAnyDailyPins || hasPendingCellEdits) && (
               <button
                 type="button"
-                onClick={() => setRules((r) => ({ ...r, shiftDayHeadcountOverrides: {} }))}
+                onClick={() => {
+                  setDraftCellEdits({});
+                  setRules((r) => ({ ...r, shiftDayHeadcountOverrides: {} }));
+                }}
                 className="cnx-pill-interactive rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 cursor-pointer"
               >
                 Reset Daily Pins
@@ -2378,6 +2571,21 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
             </span>
           </div>
         </div>
+        {hasPendingCellEdits && (
+          <div className="px-5 py-2 bg-emerald-500/[0.08] border-b border-emerald-500/25 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200">
+            <span>
+              Pending edits staged (live totals updated) — other cells will NOT auto-adjust until you click{' '}
+              <strong>✓ Apply Manual Edits</strong>. Only your edited cells lock; untouched cells remain Auto.
+            </span>
+            <button
+              type="button"
+              onClick={commitDraftCellEdits}
+              className="rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-0.5 text-[10.5px] font-bold cursor-pointer"
+            >
+              ✓ Apply Manual Edits Now
+            </button>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead className="bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
@@ -2395,7 +2603,10 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70 font-mono">
-              {scheduleResult.shiftDailyMix.map((row) => (
+              {liveRowTotals.map(({ row, rowSum }) => {
+                const liveAvg = rowSum / 7;
+                const liveMixPct = totalWeeklyActive > 0 ? (rowSum / totalWeeklyActive) * 100 : 0;
+                return (
                 <tr key={row.shiftId} className="hover:bg-sky-500/5 transition">
                   <td className="px-4 py-2 text-left font-sans">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -2429,12 +2640,20 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                     </span>
                   </td>
                   <td className="px-3 py-2 text-right text-slate-500 dark:text-slate-400">
-                    {row.avgPerDay.toFixed(1)}
+                    {liveAvg.toFixed(1)}
                   </td>
                   {WEEK_DAYS.map((d) => {
+                    const stagedRaw = draftCellEdits[row.shiftId]?.[d];
+                    const isStaged = stagedRaw !== undefined;
                     const rawDayPin = rules.shiftDayHeadcountOverrides?.[row.shiftId]?.[d];
-                    const hasPin = rawDayPin !== undefined && rawDayPin !== null && Number.isFinite(rawDayPin);
+                    const hasCommittedPin =
+                      rawDayPin !== undefined && rawDayPin !== null && Number.isFinite(rawDayPin);
                     const actualVal = row.byDay[d];
+                    const displayedVal = isStaged
+                      ? stagedRaw
+                      : hasCommittedPin
+                        ? String(rawDayPin)
+                        : '';
 
                     return (
                       <td key={d} className="px-1.5 py-1.5 text-center">
@@ -2444,38 +2663,42 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                             min={0}
                             max={500}
                             step={1}
-                            value={hasPin ? String(rawDayPin) : ''}
+                            value={displayedVal}
                             placeholder={String(actualVal)}
                             aria-label={`${row.shiftLabel} ${d} daily scheduled headcount`}
                             onChange={(e) => {
-                              const raw = e.target.value.trim();
-                              setRules((r) => {
-                                const prevAll = { ...(r.shiftDayHeadcountOverrides ?? {}) };
-                                const prevShift = { ...(prevAll[row.shiftId] ?? {}) };
-                                if (raw === '') {
-                                  delete prevShift[d];
-                                } else {
-                                  const parsed = Number(raw);
-                                  if (!Number.isFinite(parsed)) return r;
-                                  prevShift[d] = Math.max(0, Math.min(500, Math.round(parsed)));
-                                }
-                                if (Object.keys(prevShift).length === 0) {
-                                  delete prevAll[row.shiftId];
-                                } else {
-                                  prevAll[row.shiftId] = prevShift;
-                                }
-                                return { ...r, shiftDayHeadcountOverrides: prevAll };
-                              });
+                              const raw = e.target.value;
+                              setDraftCellEdits((prev) => ({
+                                ...prev,
+                                [row.shiftId]: { ...(prev[row.shiftId] ?? {}), [d]: raw },
+                              }));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.currentTarget.blur();
+                                commitDraftCellEdits();
+                              } else if (e.key === 'Escape') {
+                                setDraftCellEdits((prev) => {
+                                  const nextSh = { ...(prev[row.shiftId] ?? {}) };
+                                  delete nextSh[d];
+                                  const next = { ...prev };
+                                  if (Object.keys(nextSh).length === 0) delete next[row.shiftId];
+                                  else next[row.shiftId] = nextSh;
+                                  return next;
+                                });
+                              }
                             }}
                             className={`w-14 rounded-lg border px-1.5 py-1 text-center text-xs font-mono font-bold transition focus:outline-none focus:border-sky-500 ${
-                              hasPin
-                                ? 'border-amber-500/60 bg-amber-500/12 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/25'
-                                : actualVal > 0
-                                  ? 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-slate-900 dark:text-slate-100 placeholder:text-slate-800 dark:placeholder:text-slate-100 hover:border-sky-400'
-                                  : 'border-slate-200/70 dark:border-slate-800/70 bg-transparent text-slate-400 placeholder:text-slate-300 dark:placeholder:text-slate-700 hover:border-sky-400'
+                              isStaged
+                                ? 'border-emerald-500 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 ring-2 ring-emerald-500/35'
+                                : hasCommittedPin
+                                  ? 'border-amber-500/60 bg-amber-500/12 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/25'
+                                  : actualVal > 0
+                                    ? 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-slate-900 dark:text-slate-100 placeholder:text-slate-800 dark:placeholder:text-slate-100 hover:border-sky-400'
+                                    : 'border-slate-200/70 dark:border-slate-800/70 bg-transparent text-slate-400 placeholder:text-slate-300 dark:placeholder:text-slate-700 hover:border-sky-400'
                             }`}
                           />
-                          {hasPin && actualVal !== rawDayPin && (
+                          {!isStaged && hasCommittedPin && actualVal !== rawDayPin && (
                             <span
                               className="mt-0.5 text-[9px] font-bold text-slate-500 dark:text-slate-400"
                               title="Actual scheduled count after roster constraints"
@@ -2488,77 +2711,56 @@ export const Tab4Scheduling: React.FC<Tab4SchedulingProps> = ({
                     );
                   })}
                   <td className="px-3 py-2 text-right font-bold text-slate-900 dark:text-white">
-                    {row.totalWeeklyShifts}
+                    {rowSum}
                   </td>
                   <td className="px-4 py-2 text-right font-semibold text-sky-600 dark:text-sky-400">
-                    {row.shareOfShiftsPct.toFixed(1)}%
+                    {liveMixPct.toFixed(1)}%
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot className="bg-slate-50 dark:bg-slate-950/80 border-t-2 border-slate-200 dark:border-slate-800 font-mono text-xs">
-              {(() => {
-                const dailyActive = WEEK_DAYS.map((d) =>
-                  scheduleResult.shiftDailyMix.reduce((acc, row) => acc + row.byDay[d], 0)
-                );
-                const dailyOff = WEEK_DAYS.map(
-                  (d) => scheduleResult.agents.filter((a) => a.assignments[d].status === 'OFF').length
-                );
-                const dailyLeave = WEEK_DAYS.map(
-                  (d) =>
-                    scheduleResult.agents.filter(
-                      (a) => a.assignments[d].status !== 'WORK' && a.assignments[d].status !== 'OFF'
-                    ).length
-                );
-                const totalWeeklyActive = dailyActive.reduce((s, v) => s + v, 0);
-                const totalWeeklyOff = dailyOff.reduce((s, v) => s + v, 0);
-                const totalWeeklyLeave = dailyLeave.reduce((s, v) => s + v, 0);
-
-                return (
-                  <>
-                    <tr className="font-bold text-slate-900 dark:text-white bg-sky-500/[0.06]">
-                      <td className="px-4 py-2 text-left font-sans">TOTAL ACTIVE WORKING SHIFTS</td>
-                      <td className="px-3 py-2 text-right text-sky-600 dark:text-sky-400">
-                        {summary.activeSchedulableCount}
-                      </td>
-                      <td className="px-3 py-2 text-right">{(totalWeeklyActive / 7).toFixed(1)}</td>
-                      {dailyActive.map((cnt, idx) => (
-                        <td key={WEEK_DAYS[idx]} className="px-3 py-2 text-right text-sky-700 dark:text-sky-300">
-                          {cnt}
-                        </td>
-                      ))}
-                      <td className="px-3 py-2 text-right">{totalWeeklyActive}</td>
-                      <td className="px-4 py-2 text-right">100.0%</td>
-                    </tr>
-                    <tr className="text-emerald-700 dark:text-emerald-300">
-                      <td className="px-4 py-1.5 text-left font-sans font-semibold">Scheduled Day OFFs</td>
-                      <td className="px-3 py-1.5 text-right">—</td>
-                      <td className="px-3 py-1.5 text-right">{(totalWeeklyOff / 7).toFixed(1)}</td>
-                      {dailyOff.map((cnt, idx) => (
-                        <td key={WEEK_DAYS[idx]} className="px-3 py-1.5 text-right">
-                          {cnt}
-                        </td>
-                      ))}
-                      <td className="px-3 py-1.5 text-right font-semibold">{totalWeeklyOff}</td>
-                      <td className="px-4 py-1.5 text-right">—</td>
-                    </tr>
-                    <tr className="text-amber-700 dark:text-amber-300">
-                      <td className="px-4 py-1.5 text-left font-sans font-semibold">
-                        Full-Week Leaves (AL / MAT / RES / TERM / UPL / PAT)
-                      </td>
-                      <td className="px-3 py-1.5 text-right">{dailyLeave[0] ?? 0}</td>
-                      <td className="px-3 py-1.5 text-right">{(totalWeeklyLeave / 7).toFixed(1)}</td>
-                      {dailyLeave.map((cnt, idx) => (
-                        <td key={WEEK_DAYS[idx]} className="px-3 py-1.5 text-right">
-                          {cnt}
-                        </td>
-                      ))}
-                      <td className="px-3 py-1.5 text-right font-semibold">{totalWeeklyLeave}</td>
-                      <td className="px-4 py-1.5 text-right">—</td>
-                    </tr>
-                  </>
-                );
-              })()}
+              <tr className="font-bold text-slate-900 dark:text-white bg-sky-500/[0.06]">
+                <td className="px-4 py-2 text-left font-sans">TOTAL ACTIVE WORKING SHIFTS</td>
+                <td className="px-3 py-2 text-right text-sky-600 dark:text-sky-400">
+                  {summary.activeSchedulableCount}
+                </td>
+                <td className="px-3 py-2 text-right">{(totalWeeklyActive / 7).toFixed(1)}</td>
+                {dailyActive.map((cnt, idx) => (
+                  <td key={WEEK_DAYS[idx]} className="px-3 py-2 text-right text-sky-700 dark:text-sky-300">
+                    {cnt}
+                  </td>
+                ))}
+                <td className="px-3 py-2 text-right">{totalWeeklyActive}</td>
+                <td className="px-4 py-2 text-right">100.0%</td>
+              </tr>
+              <tr className="text-emerald-700 dark:text-emerald-300">
+                <td className="px-4 py-1.5 text-left font-sans font-semibold">Scheduled Day OFFs</td>
+                <td className="px-3 py-1.5 text-right">—</td>
+                <td className="px-3 py-1.5 text-right">{(totalWeeklyOff / 7).toFixed(1)}</td>
+                {dailyOff.map((cnt, idx) => (
+                  <td key={WEEK_DAYS[idx]} className="px-3 py-1.5 text-right">
+                    {cnt}
+                  </td>
+                ))}
+                <td className="px-3 py-1.5 text-right font-semibold">{totalWeeklyOff}</td>
+                <td className="px-4 py-1.5 text-right">—</td>
+              </tr>
+              <tr className="text-amber-700 dark:text-amber-300">
+                <td className="px-4 py-1.5 text-left font-sans font-semibold">
+                  Full-Week Leaves (AL / MAT / RES / TERM / UPL / PAT)
+                </td>
+                <td className="px-3 py-1.5 text-right">{dailyLeave[0] ?? 0}</td>
+                <td className="px-3 py-1.5 text-right">{(totalWeeklyLeave / 7).toFixed(1)}</td>
+                {dailyLeave.map((cnt, idx) => (
+                  <td key={WEEK_DAYS[idx]} className="px-3 py-1.5 text-right">
+                    {cnt}
+                  </td>
+                ))}
+                <td className="px-3 py-1.5 text-right font-semibold">{totalWeeklyLeave}</td>
+                <td className="px-4 py-1.5 text-right">—</td>
+              </tr>
             </tfoot>
           </table>
         </div>
